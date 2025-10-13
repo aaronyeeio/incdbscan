@@ -10,33 +10,42 @@ class Inserter:
         self.min_pts = min_pts
         self.objects = objects
 
-    def insert(self, object_value):
-        object_inserted = self.objects.insert_object(object_value)
+    def batch_insert(self, object_values, weights):
+        """Insert multiple objects at once and update clustering."""
+        objects_inserted = self.objects.batch_insert_objects(
+            object_values, weights)
 
+        if not objects_inserted:
+            # All objects already existed, no new objects to cluster
+            return
+
+        # Collect all affected objects (new objects + their neighbors)
+        all_affected_objects = set(objects_inserted)
+        for obj in objects_inserted:
+            all_affected_objects.update(obj.neighbors)
+
+        # Identify new cores and old cores among ALL affected objects
         new_core_neighbors, old_core_neighbors = \
-            self._separate_core_neighbors_by_novelty(object_inserted)
+            self._separate_core_neighbors_by_novelty_batch(
+                objects_inserted, all_affected_objects)
 
         if not new_core_neighbors:
-            # If there is no new core object, only the new object has to be
-            # put in a cluster.
+            # No new core objects created, just assign labels to new objects
+            for obj in objects_inserted:
+                # Find core neighbors of this object
+                core_neighbors = [n for n in obj.neighbors
+                                  if n.neighbor_count >= self.min_pts and n != obj]
 
-            if old_core_neighbors:
-                # If there are already core objects near to the new object,
-                # the new object is put in the most recent cluster. This is
-                # similar to case "Absorption" in the paper but not defined
-                # there.
+                if core_neighbors:
+                    # Assign to the most recent cluster
+                    label_of_new_object = max([
+                        self.objects.get_label(n) for n in core_neighbors
+                    ])
+                else:
+                    # No core neighbors, mark as noise
+                    label_of_new_object = CLUSTER_LABEL_NOISE
 
-                label_of_new_object = max([
-                    self.objects.get_label(obj) for obj in old_core_neighbors
-                ])
-
-            else:
-                # If the new object does not have any core neighbors,
-                # it becomes a noise. Called case "Noise" in the paper.
-
-                label_of_new_object = CLUSTER_LABEL_NOISE
-
-            self.objects.set_label(object_inserted, label_of_new_object)
+                self.objects.set_label(obj, label_of_new_object)
             return
 
         update_seeds = self._get_update_seeds(new_core_neighbors)
@@ -73,6 +82,46 @@ class Inserter:
         # and the object being inserted.
 
         self._set_cluster_label_around_new_core_neighbors(new_core_neighbors)
+
+        # After processing core objects, handle any remaining UNCLASSIFIED objects
+        # that were inserted but not assigned a label yet
+        for obj in objects_inserted:
+            if self.objects.get_label(obj) == CLUSTER_LABEL_UNCLASSIFIED:
+                # Find core neighbors
+                core_neighbors = [n for n in obj.neighbors
+                                  if n.neighbor_count >= self.min_pts and n != obj]
+
+                if core_neighbors:
+                    # Assign to the most recent cluster among core neighbors
+                    label_of_new_object = max([
+                        self.objects.get_label(n) for n in core_neighbors
+                    ])
+                else:
+                    # No core neighbors, mark as noise
+                    label_of_new_object = CLUSTER_LABEL_NOISE
+
+                self.objects.set_label(obj, label_of_new_object)
+
+    def _separate_core_neighbors_by_novelty_batch(self, objects_inserted, all_affected_objects):
+        """Identify new cores and old cores among all affected objects during batch insert."""
+        new_cores = set()
+        old_cores = set()
+        objects_inserted_set = set(objects_inserted)
+
+        for obj in all_affected_objects:
+            if obj.neighbor_count == self.min_pts:
+                # Just became a core
+                new_cores.add(obj)
+            elif obj.neighbor_count > self.min_pts:
+                # Was already a core, but check if it's a newly inserted object
+                if obj in objects_inserted_set:
+                    # Newly inserted object that is core -> treat as new core
+                    new_cores.add(obj)
+                else:
+                    # Was core before this batch insertion
+                    old_cores.add(obj)
+
+        return new_cores, old_cores
 
     def _separate_core_neighbors_by_novelty(self, object_inserted):
         new_cores = set()

@@ -36,7 +36,9 @@ class LabelHandler:
         return self._object_to_label[obj]
 
     def get_next_cluster_label(self):
-        return max(self._label_to_objects.keys()) + 1
+        max_label = max(self._label_to_objects.keys())
+        # Ensure we return a valid cluster label (>= 0)
+        return max(max_label + 1, CLUSTER_LABEL_FIRST_CLUSTER)
 
     def change_labels(self, change_from, change_to):
         affected_objects = self._label_to_objects.pop(change_from)

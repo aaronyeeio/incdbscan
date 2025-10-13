@@ -28,8 +28,8 @@ class IncrementalDBSCAN:
         The radius of neighborhood calculation. An object is the neighbor of
         another if the distance between them is no more than eps.
 
-    min_pts : int, optional (default=1)
-        The minimum number of neighbors that an object needs to have to be a
+    min_pts : int or float, optional (default=1)
+        The minimum sum of neighbor weights that an object needs to have to be a
         core object of a cluster.
 
     metric : string or callable, optional (default='minkowski')
@@ -59,13 +59,16 @@ class IncrementalDBSCAN:
         self._inserter = Inserter(self.eps, self.min_pts, self._objects)
         self._deleter = Deleter(self.eps, self.min_pts, self._objects)
 
-    def insert(self, X):
+    def insert(self, X, sample_weight=None):
         """Insert objects into the object set, then update clustering.
 
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
             The data objects to be inserted into the object set.
+
+        sample_weight : array-like of shape (n_samples,), optional (default=None)
+            Weight of each sample. If None, all samples have weight 1.
 
         Returns
         -------
@@ -74,8 +77,18 @@ class IncrementalDBSCAN:
         """
         X = input_check(X)
 
-        for value in X:
-            self._inserter.insert(value)
+        if sample_weight is None:
+            sample_weight = np.ones(len(X))
+        else:
+            sample_weight = np.asarray(sample_weight)
+            if len(sample_weight) != len(X):
+                raise ValueError(
+                    f'sample_weight has {len(sample_weight)} elements, '
+                    f'but X has {len(X)} samples.'
+                )
+
+        # Use batch insertion for all cases
+        self._inserter.batch_insert(X, sample_weight)
 
         return self
 
@@ -94,12 +107,16 @@ class IncrementalDBSCAN:
         """
         X = input_check(X)
 
+        # Collect objects to delete and their weights
+        objects_to_delete = []
+        weights = []
+
         for ix, value in enumerate(X):
             obj = self._objects.get_object(value)
 
             if obj:
-                self._deleter.delete(obj)
-
+                objects_to_delete.append(obj)
+                weights.append(1.0)
             else:
                 warnings.warn(
                     IncrementalDBSCANWarning(
@@ -107,6 +124,10 @@ class IncrementalDBSCAN:
                         'there is no such object in the object set.'
                     )
                 )
+
+        # Batch delete all objects at once
+        if objects_to_delete:
+            self._deleter.batch_delete(objects_to_delete, weights)
 
         return self
 

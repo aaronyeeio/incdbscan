@@ -34,23 +34,84 @@ class Objects(LabelHandler):
             return obj
         return None
 
-    def insert_object(self, value):
-        object_id = hash_(value)
+    def batch_insert_objects(self, values, weights):
+        """Insert multiple objects at once, handling neighbor relationships efficiently."""
+        object_ids = [hash_(value) for value in values]
 
-        if object_id in self._object_id_to_node_id:
-            obj = self._get_object_from_object_id(object_id)
-            obj.count += 1
-            for neighbor in obj.neighbors:
-                neighbor.neighbor_count += 1
-            return obj
+        # Group duplicates: accumulate weights for same object_id
+        id_info = {}  # object_id -> (value, total_weight)
+        for i, (value, object_id, weight) in enumerate(zip(values, object_ids, weights)):
+            if object_id in id_info:
+                id_info[object_id] = (
+                    id_info[object_id][0], id_info[object_id][1] + weight)
+            else:
+                id_info[object_id] = (value, weight)
 
-        new_object = Object(object_id, self.min_pts)
+        # Separate existing vs new objects
+        new_objects = []
+        new_values = []
+        new_ids = []
 
-        self._insert_graph_metadata(new_object)
-        self.set_label_of_inserted_object(new_object)
-        self.neighbor_searcher.insert(value, object_id)
-        self._update_neighbors_during_insertion(new_object, value)
-        return new_object
+        for object_id, (value, total_weight) in id_info.items():
+            if object_id in self._object_id_to_node_id:
+                # Existing object - update weight and neighbor counts
+                obj = self._get_object_from_object_id(object_id)
+                obj.weight += total_weight
+                for neighbor in obj.neighbors:
+                    neighbor.neighbor_count += total_weight
+            else:
+                # New object
+                new_obj = Object(object_id, self.min_pts, total_weight)
+                self._insert_graph_metadata(new_obj)
+                self.set_label_of_inserted_object(new_obj)
+                new_objects.append(new_obj)
+                new_values.append(value)
+                new_ids.append(object_id)
+
+        if not new_objects:
+            return []
+
+        # Batch insert all new values into neighbor searcher (rebuilds tree once)
+        self.neighbor_searcher.batch_insert(new_values, new_ids)
+
+        # Batch query neighbors for all new objects
+        all_neighbor_ids_list = self.neighbor_searcher.batch_query_neighbors(
+            new_values)
+
+        # Build lookup for new object indices
+        new_obj_id_to_index = {obj.id: i for i, obj in enumerate(new_objects)}
+
+        # Update neighbor relationships
+        for i, (new_obj, neighbor_ids) in enumerate(zip(new_objects, all_neighbor_ids_list)):
+            for neighbor_id in neighbor_ids:
+                neighbor_obj = self._get_object_from_object_id(neighbor_id)
+
+                if neighbor_id == new_obj.id:
+                    # Self-neighbor: increase own count
+                    new_obj.neighbor_count += new_obj.weight
+                elif neighbor_id in new_obj_id_to_index and new_obj_id_to_index[neighbor_id] > i:
+                    # New object not yet processed: update both sides
+                    new_obj.neighbor_count += neighbor_obj.weight
+                    new_obj.neighbors.add(neighbor_obj)
+                    neighbor_obj.neighbor_count += new_obj.weight
+                    neighbor_obj.neighbors.add(new_obj)
+                    self.graph.add_edge(
+                        new_obj.node_id, neighbor_obj.node_id, None)
+                elif neighbor_id in new_obj_id_to_index:
+                    # New object already processed: only add to set and edge
+                    new_obj.neighbors.add(neighbor_obj)
+                    self.graph.add_edge(
+                        new_obj.node_id, neighbor_obj.node_id, None)
+                else:
+                    # Existing object: update both sides
+                    new_obj.neighbor_count += neighbor_obj.weight
+                    new_obj.neighbors.add(neighbor_obj)
+                    neighbor_obj.neighbor_count += new_obj.weight
+                    neighbor_obj.neighbors.add(new_obj)
+                    self.graph.add_edge(
+                        new_obj.node_id, neighbor_obj.node_id, None)
+
+        return new_objects
 
     def _insert_graph_metadata(self, new_object):
         node_id = self.graph.add_node(new_object)
@@ -61,9 +122,9 @@ class Objects(LabelHandler):
     def _update_neighbors_during_insertion(self, object_inserted, new_value):
         neighbors = self._get_neighbors(new_value)
         for obj in neighbors:
-            obj.neighbor_count += 1
+            obj.neighbor_count += object_inserted.weight
             if obj.id != object_inserted.id:
-                object_inserted.neighbor_count += obj.count
+                object_inserted.neighbor_count += obj.weight
                 obj.neighbors.add(object_inserted)
                 object_inserted.neighbors.add(obj)
                 self.graph.add_edge(object_inserted.node_id, obj.node_id, None)
@@ -80,20 +141,59 @@ class Objects(LabelHandler):
         obj = self.graph[node_id]
         return obj
 
-    def delete_object(self, obj):
-        obj.count -= 1
-        remove_from_data = obj.count == 0
+    def batch_delete_objects(self, objects_to_delete, weights):
+        """Delete multiple objects at once, handling weight reduction and cleanup efficiently.
 
-        for neighbor in obj.neighbors:
-            neighbor.neighbor_count -= 1
-            if remove_from_data:
+        Args:
+            objects_to_delete: list of Object instances to delete
+            weights: list of weights to reduce for each object
+
+        Returns:
+            was_core_map: dict mapping object to whether it was core before deletion
+            objects_to_remove: list of objects that will be completely removed (weight <= 0)
+        """
+        from collections import defaultdict
+
+        # Group by object and accumulate weights for duplicates
+        object_weight_map = defaultdict(float)
+        for obj, weight in zip(objects_to_delete, weights):
+            object_weight_map[obj] += weight
+
+        # Record which objects were core before deletion
+        was_core_map = {}
+        for obj in object_weight_map:
+            was_core_map[obj] = obj.is_core
+
+        # Phase 1: Reduce weights for all objects and their neighbors
+        objects_to_remove = []
+        for obj, total_weight in object_weight_map.items():
+            obj.weight -= total_weight
+
+            # Update neighbor counts for all neighbors
+            for neighbor in obj.neighbors:
+                neighbor.neighbor_count -= total_weight
+
+            if obj.weight <= 0:
+                objects_to_remove.append(obj)
+
+        # Phase 2: Clean up objects that need to be completely removed
+        # Remove from neighbor sets
+        for obj in objects_to_remove:
+            for neighbor in obj.neighbors:
                 if neighbor.id != obj.id:
                     neighbor.neighbors.remove(obj)
 
-        if remove_from_data:
+        # Batch delete from neighbor searcher (rebuild tree only once)
+        if objects_to_remove:
+            ids_to_remove = [obj.id for obj in objects_to_remove]
+            self.neighbor_searcher.batch_delete(ids_to_remove)
+
+        # Remove graph metadata and labels
+        for obj in objects_to_remove:
             self._delete_graph_metadata(obj)
-            self.neighbor_searcher.delete(obj.id)
             self.delete_label_of_deleted_object(obj)
+
+        return was_core_map, objects_to_remove
 
     def _delete_graph_metadata(self, deleted_object):
         node_id = deleted_object.node_id
@@ -108,7 +208,8 @@ class Objects(LabelHandler):
 
         node_ids = [obj.node_id for obj in objects]
         subgraph = self.graph.subgraph(node_ids)
-        components_as_ids: List[Set[NodeId]] = rx.connected_components(subgraph)  # pylint: disable=no-member
+        components_as_ids: List[Set[NodeId]] = rx.connected_components(
+            subgraph)  # pylint: disable=no-member
 
         def _get_original_object(subgraph, subgraph_node_id):
             original_node_id = subgraph[subgraph_node_id].node_id
