@@ -5,8 +5,9 @@ from ._clusters import (
 
 
 class Inserter:
-    def __init__(self, eps, min_pts, objects):
+    def __init__(self, eps, eps_merge, min_pts, objects):
         self.eps = eps
+        self.eps_merge = eps_merge
         self.min_pts = min_pts
         self.objects = objects
         self.clusters = objects.clusters  # Shorthand for clusters
@@ -157,7 +158,7 @@ class Inserter:
         seeds = set()
 
         for new_core_neighbor in new_core_neighbors:
-            core_neighbors = [obj for obj in new_core_neighbor.neighbors
+            core_neighbors = [obj for obj in new_core_neighbor.merge_neighbors
                               if obj.neighbor_count >= self.min_pts]
             seeds.update(core_neighbors)
 

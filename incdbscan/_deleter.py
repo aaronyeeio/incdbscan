@@ -7,8 +7,9 @@ from ._clusters import CLUSTER_LABEL_NOISE
 
 
 class Deleter:
-    def __init__(self, eps, min_pts, objects):
+    def __init__(self, eps, eps_merge, min_pts, objects):
         self.eps = eps
+        self.eps_merge = eps_merge
         self.min_pts = min_pts
         self.objects = objects
         self.clusters = objects.clusters  # Shorthand for clusters
@@ -78,7 +79,8 @@ class Deleter:
         # Phase 6: Update core status for all affected objects
         # Remove objects that were completely deleted
         affected_objects_for_stats.difference_update(objects_removed)
-        self.clusters.update_core_status_for_objects(affected_objects_for_stats)
+        self.clusters.update_core_status_for_objects(
+            affected_objects_for_stats)
 
     def _get_objects_that_lost_core_property_batch(self, objects_deleted,
                                                    weights, was_core_map):
@@ -183,8 +185,8 @@ class Deleter:
             return []
 
         seed_node_ids = [obj.node_id for obj in seed_objects]
-        finder = BFSComponentFinder(self.objects.graph)
-        rx.bfs_search(self.objects.graph, seed_node_ids, finder)
+        finder = BFSComponentFinder(self.objects.merge_graph)
+        rx.bfs_search(self.objects.merge_graph, seed_node_ids, finder)
 
         seed_of_largest, size_of_largest = 0, 0
         for seed_id, component in finder.seed_to_component.items():
@@ -201,7 +203,7 @@ class Deleter:
     def _objects_are_neighbors_of_each_other(objects):
         for obj1 in objects:
             for obj2 in objects:
-                if obj2 not in obj1.neighbors:
+                if obj2 not in obj1.merge_neighbors:
                     return False
         return True
 

@@ -20,14 +20,17 @@ if TYPE_CHECKING:
 
 
 class Objects:
-    def __init__(self, eps, min_pts, metric, p, clusters: 'Clusters'):
+    def __init__(self, eps, eps_merge, min_pts, metric, p, clusters: 'Clusters'):
         self.clusters = clusters
 
-        self.graph = rx.PyGraph(multigraph=False)  # pylint: disable=no-member
+        self.merge_graph = rx.PyGraph(
+            multigraph=False)  # pylint: disable=no-member
         self._object_id_to_node_id: Dict[ObjectId, NodeId] = {}
 
         self.neighbor_searcher = \
             NeighborSearcher(radius=eps, metric=metric, p=p)
+        self.merge_searcher = \
+            NeighborSearcher(radius=eps_merge, metric=metric, p=p)
         self.min_pts = min_pts
 
     def get_object(self, value):
@@ -74,17 +77,20 @@ class Objects:
         if not new_objects:
             return []
 
-        # Batch insert all new values into neighbor searcher (rebuilds tree once)
+        # Batch insert all new values into both searchers (rebuilds trees once each)
         self.neighbor_searcher.batch_insert(new_values, new_ids)
+        self.merge_searcher.batch_insert(new_values, new_ids)
 
-        # Batch query neighbors for all new objects
+        # Batch query neighbors for all new objects (both eps and eps_merge)
         all_neighbor_ids_list = self.neighbor_searcher.batch_query_neighbors(
+            new_values)
+        all_merge_neighbor_ids_list = self.merge_searcher.batch_query_neighbors(
             new_values)
 
         # Build lookup for new object indices
         new_obj_id_to_index = {obj.id: i for i, obj in enumerate(new_objects)}
 
-        # Update neighbor relationships
+        # Update neighbor relationships (eps neighbors)
         for i, (new_obj, neighbor_ids) in enumerate(zip(new_objects, all_neighbor_ids_list)):
             for neighbor_id in neighbor_ids:
                 neighbor_obj = self._get_object_from_object_id(neighbor_id)
@@ -98,26 +104,46 @@ class Objects:
                     new_obj.neighbors.add(neighbor_obj)
                     neighbor_obj.neighbor_count += new_obj.weight
                     neighbor_obj.neighbors.add(new_obj)
-                    self.graph.add_edge(
-                        new_obj.node_id, neighbor_obj.node_id, None)
                 elif neighbor_id in new_obj_id_to_index:
-                    # New object already processed: only add to set and edge
+                    # New object already processed: only add to set
                     new_obj.neighbors.add(neighbor_obj)
-                    self.graph.add_edge(
-                        new_obj.node_id, neighbor_obj.node_id, None)
                 else:
                     # Existing object: update both sides
                     new_obj.neighbor_count += neighbor_obj.weight
                     new_obj.neighbors.add(neighbor_obj)
                     neighbor_obj.neighbor_count += new_obj.weight
                     neighbor_obj.neighbors.add(new_obj)
-                    self.graph.add_edge(
+
+        # Update merge neighbor relationships (eps_merge neighbors)
+        for i, (new_obj, merge_neighbor_ids) in enumerate(zip(new_objects, all_merge_neighbor_ids_list)):
+            for neighbor_id in merge_neighbor_ids:
+                neighbor_obj = self._get_object_from_object_id(neighbor_id)
+
+                if neighbor_id == new_obj.id:
+                    # Self is always a merge neighbor
+                    pass
+                elif neighbor_id in new_obj_id_to_index and new_obj_id_to_index[neighbor_id] > i:
+                    # New object not yet processed: update both sides and add edge
+                    new_obj.merge_neighbors.add(neighbor_obj)
+                    neighbor_obj.merge_neighbors.add(new_obj)
+                    self.merge_graph.add_edge(
+                        new_obj.node_id, neighbor_obj.node_id, None)
+                elif neighbor_id in new_obj_id_to_index:
+                    # New object already processed: only add to set and edge
+                    new_obj.merge_neighbors.add(neighbor_obj)
+                    self.merge_graph.add_edge(
+                        new_obj.node_id, neighbor_obj.node_id, None)
+                else:
+                    # Existing object: update both sides and add edge
+                    new_obj.merge_neighbors.add(neighbor_obj)
+                    neighbor_obj.merge_neighbors.add(new_obj)
+                    self.merge_graph.add_edge(
                         new_obj.node_id, neighbor_obj.node_id, None)
 
         return new_objects
 
     def _insert_graph_metadata(self, new_object):
-        node_id = self.graph.add_node(new_object)
+        node_id = self.merge_graph.add_node(new_object)
         new_object.node_id = node_id
         object_id = new_object.id
         self._object_id_to_node_id[object_id] = node_id
@@ -130,7 +156,6 @@ class Objects:
                 object_inserted.neighbor_count += obj.weight
                 obj.neighbors.add(object_inserted)
                 object_inserted.neighbors.add(obj)
-                self.graph.add_edge(object_inserted.node_id, obj.node_id, None)
 
     def _get_neighbors(self, query_value):
         neighbor_ids = self.neighbor_searcher.query_neighbors(query_value)
@@ -141,7 +166,7 @@ class Objects:
 
     def _get_object_from_object_id(self, object_id):
         node_id = self._object_id_to_node_id[object_id]
-        obj = self.graph[node_id]
+        obj = self.merge_graph[node_id]
         return obj
 
     def batch_delete_objects(self, objects_to_delete, weights):
@@ -180,16 +205,20 @@ class Objects:
                 objects_to_remove.append(obj)
 
         # Phase 2: Clean up objects that need to be completely removed
-        # Remove from neighbor sets
+        # Remove from both neighbor sets
         for obj in objects_to_remove:
             for neighbor in obj.neighbors:
                 if neighbor.id != obj.id:
                     neighbor.neighbors.remove(obj)
+            for neighbor in obj.merge_neighbors:
+                if neighbor.id != obj.id:
+                    neighbor.merge_neighbors.remove(obj)
 
-        # Batch delete from neighbor searcher (rebuild tree only once)
+        # Batch delete from both neighbor searchers (rebuild trees only once each)
         if objects_to_remove:
             ids_to_remove = [obj.id for obj in objects_to_remove]
             self.neighbor_searcher.batch_delete(ids_to_remove)
+            self.merge_searcher.batch_delete(ids_to_remove)
 
         # Remove graph metadata and labels
         for obj in objects_to_remove:
@@ -200,7 +229,7 @@ class Objects:
 
     def _delete_graph_metadata(self, deleted_object):
         node_id = deleted_object.node_id
-        self.graph.remove_node(node_id)
+        self.merge_graph.remove_node(node_id)
         del self._object_id_to_node_id[deleted_object.id]
 
     def get_connected_components_within_objects(
@@ -210,13 +239,13 @@ class Objects:
             return [objects]
 
         node_ids = [obj.node_id for obj in objects]
-        subgraph = self.graph.subgraph(node_ids)
+        subgraph = self.merge_graph.subgraph(node_ids)
         components_as_ids: List[Set[NodeId]] = rx.connected_components(
             subgraph)  # pylint: disable=no-member
 
         def _get_original_object(subgraph, subgraph_node_id):
             original_node_id = subgraph[subgraph_node_id].node_id
-            return self.graph[original_node_id]
+            return self.merge_graph[original_node_id]
 
         components_as_objects = []
         for component in components_as_ids:

@@ -33,6 +33,13 @@ class IncrementalDBSCAN:
         The minimum sum of neighbor weights that an object needs to have to be a
         core object of a cluster.
 
+    eps_merge : float, optional (default=None)
+        The radius for determining connectivity between core objects for cluster
+        merging. Must be <= eps. If None, defaults to eps (standard DBSCAN).
+        Using eps_merge < eps implements two-level density: border points can
+        connect to clusters using eps, but clusters only merge when core points
+        are within eps_merge of each other.
+
     metric : string or callable, optional (default='minkowski')
         The distance metric to use to calculate distance between data objects.
         Accepts metrics that are accepted by scikit-learn's NearestNeighbors
@@ -50,17 +57,23 @@ class IncrementalDBSCAN:
 
     """
 
-    def __init__(self, eps=1, min_pts=5, metric='minkowski', p=2):
+    def __init__(self, eps=1, min_pts=5, eps_merge=None, metric='minkowski', p=2):
         self.eps = eps
+        self.eps_merge = eps_merge if eps_merge is not None else eps
         self.min_pts = min_pts
         self.metric = metric
         self.p = p
 
+        if self.eps_merge > self.eps:
+            raise ValueError("eps_merge must be <= eps")
+
         self.clusters = Clusters()
-        self._objects = Objects(self.eps, self.min_pts, self.metric, self.p,
-                                self.clusters)
-        self._inserter = Inserter(self.eps, self.min_pts, self._objects)
-        self._deleter = Deleter(self.eps, self.min_pts, self._objects)
+        self._objects = Objects(self.eps, self.eps_merge, self.min_pts,
+                                self.metric, self.p, self.clusters)
+        self._inserter = Inserter(self.eps, self.eps_merge, self.min_pts,
+                                  self._objects)
+        self._deleter = Deleter(self.eps, self.eps_merge, self.min_pts,
+                                self._objects)
 
     def insert(self, X, sample_weight=None):
         """Insert objects into the object set, then update clustering.
