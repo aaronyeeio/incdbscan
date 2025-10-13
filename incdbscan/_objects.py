@@ -1,12 +1,12 @@
 from typing import (
     Dict,
     List,
-    Set
+    Set,
+    TYPE_CHECKING
 )
 
 import rustworkx as rx
 
-from ._labels import LabelHandler
 from ._neighbor_searcher import NeighborSearcher
 from ._object import (
     NodeId,
@@ -15,10 +15,13 @@ from ._object import (
 )
 from ._utils import hash_
 
+if TYPE_CHECKING:
+    from ._clusters import Clusters
 
-class Objects(LabelHandler):
-    def __init__(self, eps, min_pts, metric, p):
-        super().__init__()
+
+class Objects:
+    def __init__(self, eps, min_pts, metric, p, clusters: 'Clusters'):
+        self.clusters = clusters
 
         self.graph = rx.PyGraph(multigraph=False)  # pylint: disable=no-member
         self._object_id_to_node_id: Dict[ObjectId, NodeId] = {}
@@ -63,7 +66,7 @@ class Objects(LabelHandler):
                 # New object
                 new_obj = Object(object_id, self.min_pts, total_weight)
                 self._insert_graph_metadata(new_obj)
-                self.set_label_of_inserted_object(new_obj)
+                self.clusters.set_label_of_inserted_object(new_obj)
                 new_objects.append(new_obj)
                 new_values.append(value)
                 new_ids.append(object_id)
@@ -191,7 +194,7 @@ class Objects(LabelHandler):
         # Remove graph metadata and labels
         for obj in objects_to_remove:
             self._delete_graph_metadata(obj)
-            self.delete_label_of_deleted_object(obj)
+            self.clusters.delete_label_of_deleted_object(obj)
 
         return was_core_map, objects_to_remove
 

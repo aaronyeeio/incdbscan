@@ -1,4 +1,4 @@
-from ._labels import (
+from ._clusters import (
     CLUSTER_LABEL_NOISE,
     CLUSTER_LABEL_UNCLASSIFIED
 )
@@ -9,6 +9,7 @@ class Inserter:
         self.eps = eps
         self.min_pts = min_pts
         self.objects = objects
+        self.clusters = objects.clusters  # Shorthand for clusters
 
     def batch_insert(self, object_values, weights):
         """Insert multiple objects at once and update clustering."""
@@ -23,6 +24,9 @@ class Inserter:
         all_affected_objects = set(objects_inserted)
         for obj in objects_inserted:
             all_affected_objects.update(obj.neighbors)
+
+        # Track existing neighbors for core status update
+        existing_neighbors = all_affected_objects - set(objects_inserted)
 
         # Identify new cores and old cores among ALL affected objects
         new_core_neighbors, old_core_neighbors = \
@@ -39,13 +43,13 @@ class Inserter:
                 if core_neighbors:
                     # Assign to the most recent cluster
                     label_of_new_object = max([
-                        self.objects.get_label(n) for n in core_neighbors
+                        self.clusters.get_label(n) for n in core_neighbors
                     ])
                 else:
                     # No core neighbors, mark as noise
                     label_of_new_object = CLUSTER_LABEL_NOISE
 
-                self.objects.set_label(obj, label_of_new_object)
+                self.clusters.set_label(obj, label_of_new_object)
             return
 
         update_seeds = self._get_update_seeds(new_core_neighbors)
@@ -62,8 +66,10 @@ class Inserter:
                 # previously unclassified and noise objects, a new cluster is
                 # created. Corresponds to case "Creation" in the paper.
 
-                next_cluster_label = self.objects.get_next_cluster_label()
-                self.objects.set_labels(component, next_cluster_label)
+                next_cluster_label = self.clusters.get_next_cluster_label()
+
+                # Assign labels to all objects in component
+                self.clusters.set_labels(component, next_cluster_label)
 
             else:
                 # If in a connected component of update seeds there are
@@ -72,10 +78,13 @@ class Inserter:
                 # Corresponds to cases "Absorption" and "Merge" in the paper.
 
                 max_label = max(effective_cluster_labels)
-                self.objects.set_labels(component, max_label)
 
+                # Use high-level set_labels for component (handles hooks properly)
+                self.clusters.set_labels(component, max_label)
+
+                # Then merge all effective clusters using change_labels
                 for label in effective_cluster_labels:
-                    self.objects.change_labels(label, max_label)
+                    self.clusters.change_labels(label, max_label)
 
         # Finally all neighbors of each new core object inherits a label from
         # its new core neighbor, thereby affecting border and noise objects,
@@ -86,7 +95,7 @@ class Inserter:
         # After processing core objects, handle any remaining UNCLASSIFIED objects
         # that were inserted but not assigned a label yet
         for obj in objects_inserted:
-            if self.objects.get_label(obj) == CLUSTER_LABEL_UNCLASSIFIED:
+            if self.clusters.get_label(obj) == CLUSTER_LABEL_UNCLASSIFIED:
                 # Find core neighbors
                 core_neighbors = [n for n in obj.neighbors
                                   if n.neighbor_count >= self.min_pts and n != obj]
@@ -94,13 +103,16 @@ class Inserter:
                 if core_neighbors:
                     # Assign to the most recent cluster among core neighbors
                     label_of_new_object = max([
-                        self.objects.get_label(n) for n in core_neighbors
+                        self.clusters.get_label(n) for n in core_neighbors
                     ])
                 else:
                     # No core neighbors, mark as noise
                     label_of_new_object = CLUSTER_LABEL_NOISE
 
-                self.objects.set_label(obj, label_of_new_object)
+                self.clusters.set_label(obj, label_of_new_object)
+
+        # Update core status for existing neighbors that might have changed
+        self.clusters.update_core_status_for_objects(existing_neighbors)
 
     def _separate_core_neighbors_by_novelty_batch(self, objects_inserted, all_affected_objects):
         """Identify new cores and old cores among all affected objects during batch insert."""
@@ -157,7 +169,7 @@ class Inserter:
         effective_cluster_labels = set()
 
         for obj in objects:
-            label = self.objects.get_label(obj)
+            label = self.clusters.get_label(obj)
             if label not in non_effective_cluster_labels:
                 effective_cluster_labels.add(label)
 
@@ -165,5 +177,5 @@ class Inserter:
 
     def _set_cluster_label_around_new_core_neighbors(self, new_core_neighbors):
         for obj in new_core_neighbors:
-            label = self.objects.get_label(obj)
-            self.objects.set_labels(obj.neighbors, label)
+            label = self.clusters.get_label(obj)
+            self.clusters.set_labels(obj.neighbors, label)

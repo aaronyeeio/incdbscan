@@ -3,7 +3,7 @@ from collections import defaultdict
 import rustworkx as rx
 
 from ._bfscomponentfinder import BFSComponentFinder
-from ._labels import CLUSTER_LABEL_NOISE
+from ._clusters import CLUSTER_LABEL_NOISE
 
 
 class Deleter:
@@ -11,6 +11,7 @@ class Deleter:
         self.eps = eps
         self.min_pts = min_pts
         self.objects = objects
+        self.clusters = objects.clusters  # Shorthand for clusters
 
     def batch_delete(self, objects_to_delete, weights):
         """Delete multiple objects at once and update clustering.
@@ -19,6 +20,11 @@ class Deleter:
             objects_to_delete: list of Object instances to delete
             weights: list of weights to reduce for each object
         """
+        # Collect affected objects before deletion (for core status update later)
+        affected_objects_for_stats = set()
+        for obj in objects_to_delete:
+            affected_objects_for_stats.update(obj.neighbors)
+
         # Phase 1: Batch delete objects and get state information
         was_core_map, objects_removed = \
             self.objects.batch_delete_objects(objects_to_delete, weights)
@@ -40,11 +46,27 @@ class Deleter:
             update_seeds_by_cluster = \
                 self._group_objects_by_cluster(update_seeds)
 
-            for seeds in update_seeds_by_cluster.values():
-                components = self._find_components_to_split_away(seeds)
-                for component in components:
-                    self.objects.set_labels(
-                        component, self.objects.get_next_cluster_label())
+            for original_label, seeds in update_seeds_by_cluster.items():
+                components = list(self._find_components_to_split_away(seeds))
+
+                if not components:
+                    continue
+
+                # Step 1: Allocate new labels for all components
+                base_label = self.clusters.get_next_cluster_label()
+                new_components = []
+
+                for i, component in enumerate(components):
+                    new_label = base_label + i
+
+                    # Assign labels internally to all objects in this component
+                    for obj in component:
+                        self.clusters._assign_label_internal(obj, new_label)
+
+                    new_components.append((new_label, component))
+
+                # Step 2: Trigger split hook to create clusters properly
+                self.clusters.split_cluster(original_label, new_components)
 
         # Phase 5: Update labels of border objects that were in the neighborhood
         # of objects that lost their core property. They become either borders
@@ -52,6 +74,11 @@ class Deleter:
 
         self._set_each_border_object_labels_to_largest_around(
             non_core_neighbors_of_ex_cores)
+
+        # Phase 6: Update core status for all affected objects
+        # Remove objects that were completely deleted
+        affected_objects_for_stats.difference_update(objects_removed)
+        self.clusters.update_core_status_for_objects(affected_objects_for_stats)
 
     def _get_objects_that_lost_core_property_batch(self, objects_deleted,
                                                    weights, was_core_map):
@@ -143,7 +170,7 @@ class Deleter:
         grouped_objects = defaultdict(list)
 
         for obj in objects:
-            label = self.objects.get_label(obj)
+            label = self.clusters.get_label(obj)
             grouped_objects[label].append(obj)
 
         return grouped_objects
@@ -189,9 +216,9 @@ class Deleter:
             cluster_updates[obj] = max(labels)
 
         for obj, new_cluster_label in cluster_updates.items():
-            self.objects.set_label(obj, new_cluster_label)
+            self.clusters.set_label(obj, new_cluster_label)
 
     def _get_cluster_labels_in_neighborhood(self, obj):
-        return {self.objects.get_label(neighbor)
+        return {self.clusters.get_label(neighbor)
                 for neighbor in obj.neighbors
                 if neighbor.is_core}

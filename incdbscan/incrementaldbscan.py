@@ -2,6 +2,7 @@ import warnings
 
 import numpy as np
 
+from ._clusters import Clusters
 from ._deleter import Deleter
 from ._inserter import Inserter
 from ._objects import Objects
@@ -55,7 +56,9 @@ class IncrementalDBSCAN:
         self.metric = metric
         self.p = p
 
-        self._objects = Objects(self.eps, self.min_pts, self.metric, self.p)
+        self.clusters = Clusters()
+        self._objects = Objects(self.eps, self.min_pts, self.metric, self.p,
+                                self.clusters)
         self._inserter = Inserter(self.eps, self.min_pts, self._objects)
         self._deleter = Deleter(self.eps, self.min_pts, self._objects)
 
@@ -155,7 +158,7 @@ class IncrementalDBSCAN:
             obj = self._objects.get_object(value)
 
             if obj:
-                label = self._objects.get_label(obj)
+                label = self.clusters.get_label(obj)
 
             else:
                 label = np.nan
@@ -169,6 +172,41 @@ class IncrementalDBSCAN:
             labels[ix] = label
 
         return labels
+
+    def get_all_clusters(self):
+        """Get all active clusters.
+
+        Returns
+        -------
+        clusters : list of Cluster
+                   List of all active Cluster instances
+        """
+        return self.clusters.get_all_clusters()
+
+    def get_cluster(self, label):
+        """Get a specific cluster by label.
+
+        Parameters
+        ----------
+        label : int
+            The cluster label
+
+        Returns
+        -------
+        cluster : Cluster or None
+                  The Cluster instance, or None if not found
+        """
+        return self.clusters.get_cluster(label)
+
+    def get_cluster_statistics(self):
+        """Get statistics for all clusters.
+
+        Returns
+        -------
+        stats : dict
+                Dictionary containing cluster statistics
+        """
+        return self.clusters.get_statistics()
 
 
 class IncrementalDBSCANWarning(Warning):
