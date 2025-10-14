@@ -20,14 +20,15 @@ if TYPE_CHECKING:
 
 
 class Objects:
-    def __init__(self, eps, eps_merge, min_pts, metric, p, clusters: 'Clusters', eps_soft):
+    def __init__(self, eps, eps_merge, min_pts, metric, p, clusters: 'Clusters', eps_soft, nearest_neighbors='torch_cuda'):
         self.clusters = clusters
 
         self.merge_graph = rx.PyGraph(
             multigraph=False)  # pylint: disable=no-member
         self._object_id_to_node_id: Dict[ObjectId, NodeId] = {}
 
-        self.neighbor_searcher = NeighborSearcher(metric=metric, p=p)
+        self.neighbor_searcher = NeighborSearcher(
+            metric=metric, p=p, nearest_neighbors=nearest_neighbors)
         self.min_pts = min_pts
         self.eps = eps
         self.eps_merge = eps_merge

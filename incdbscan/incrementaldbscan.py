@@ -50,6 +50,12 @@ class IncrementalDBSCAN:
     p : float or int, optional (default=2)
         Parameter for Minkowski distance if metric='minkowski'.
 
+    nearest_neighbors : string, optional (default='torch_cuda')
+        Backend for nearest neighbor search. Options:
+        - 'torch_cuda': PyTorch with CUDA (GPU acceleration)
+        - 'torch_cpu': PyTorch with CPU
+        - 'sklearn': scikit-learn NearestNeighbors
+
     eps_soft : float, optional (default=None)
         The radius for soft clustering queries. If None, defaults to 2*eps.
         Typically set larger than eps to capture broader context for 
@@ -63,20 +69,21 @@ class IncrementalDBSCAN:
 
     """
 
-    def __init__(self, eps=1, min_pts=5, eps_merge=None, metric='minkowski', p=2, eps_soft=None):
+    def __init__(self, eps=1, min_pts=5, eps_merge=None, metric='minkowski', p=2, nearest_neighbors='torch_cuda', eps_soft=None):
         self.eps = eps
         self.eps_merge = eps_merge if eps_merge is not None else eps
         self.eps_soft = eps_soft if eps_soft is not None else 2 * eps
         self.min_pts = min_pts
         self.metric = metric
         self.p = p
+        self.nearest_neighbors = nearest_neighbors
 
         if self.eps_merge > self.eps:
             raise ValueError("eps_merge must be <= eps")
 
         self.clusters = Clusters()
         self._objects = Objects(self.eps, self.eps_merge, self.min_pts,
-                                self.metric, self.p, self.clusters, self.eps_soft)
+                                self.metric, self.p, self.clusters, self.eps_soft, self.nearest_neighbors)
         self._inserter = Inserter(self.eps, self.eps_merge, self.min_pts,
                                   self._objects)
         self._deleter = Deleter(self.eps, self.eps_merge, self.min_pts,

@@ -1,12 +1,35 @@
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
 from sortedcontainers import SortedList
 
 
 class NeighborSearcher:
-    def __init__(self, metric, p):
-        self.neighbor_searcher = NearestNeighbors(
-            metric=metric, p=p, n_jobs=-1)
+    def __init__(self, metric, p, nearest_neighbors='torch_cuda'):
+        """Initialize NeighborSearcher with specified backend.
+
+        Args:
+            metric: Distance metric to use
+            p: Power parameter for Minkowski metric
+            nearest_neighbors: Backend to use. Options:
+                - 'torch_cuda': PyTorch with CUDA (GPU)
+                - 'torch_cpu': PyTorch with CPU
+                - 'sklearn': sklearn NearestNeighbors
+        """
+        self.backend = nearest_neighbors
+
+        if nearest_neighbors in ['torch_cuda', 'torch_cpu']:
+            from ._nearest_neighbors_torch import NearestNeighbors
+            device = 'cuda' if nearest_neighbors == 'torch_cuda' else 'cpu'
+            self.neighbor_searcher = NearestNeighbors(
+                metric=metric, p=p, device=device)
+        elif nearest_neighbors == 'sklearn':
+            from sklearn.neighbors import NearestNeighbors
+            self.neighbor_searcher = NearestNeighbors(
+                metric=metric, p=p, n_jobs=-1)
+        else:
+            raise ValueError(
+                f"nearest_neighbors must be one of: 'torch_cuda', 'torch_cpu', 'sklearn', "
+                f"got '{nearest_neighbors}'")
+
         self.values = np.array([])
         self.ids = SortedList()
 
