@@ -5,10 +5,11 @@ from ._clusters import (
 
 
 class Inserter:
-    def __init__(self, eps, eps_merge, min_pts, objects):
+    def __init__(self, eps, eps_merge, min_pts, min_cluster_size, objects):
         self.eps = eps
         self.eps_merge = eps_merge
         self.min_pts = min_pts
+        self.min_cluster_size = min_cluster_size
         self.objects = objects
         self.clusters = objects.clusters  # Shorthand for clusters
 
@@ -16,6 +17,10 @@ class Inserter:
         """Insert multiple objects at once and update clustering."""
         new_objects, weight_updated_objects = self.objects.batch_insert_objects(
             object_values, weights)
+
+        # Update cluster weight statistics for objects whose weight was updated
+        if weight_updated_objects:
+            self.clusters.update_weight_for_objects(weight_updated_objects)
 
         # Combine all objects that need clustering update
         objects_to_process = new_objects + weight_updated_objects
@@ -118,6 +123,9 @@ class Inserter:
 
         # Update core status for existing neighbors that might have changed
         self.clusters.update_core_status_for_objects(existing_neighbors)
+
+        # Dissolve clusters that are smaller than min_cluster_size
+        self.clusters.dissolve_small_clusters(self.min_cluster_size)
 
     def _separate_core_neighbors_by_novelty_batch(self, objects_to_process, all_affected_objects):
         """Identify new cores and old cores among all affected objects during batch insert.

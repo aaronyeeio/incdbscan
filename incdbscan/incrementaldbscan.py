@@ -34,6 +34,10 @@ class IncrementalDBSCAN:
         The minimum sum of neighbor weights that an object needs to have to be a
         core object of a cluster.
 
+    min_cluster_size : int or float, optional (default=1)
+        The minimum total weight sum that a cluster needs to have. Clusters with
+        total weight less than this value will be dissolved and marked as noise.
+
     eps_merge : float, optional (default=None)
         The radius for determining connectivity between core objects for cluster
         merging. Must be <= eps. If None, defaults to eps (standard DBSCAN).
@@ -69,11 +73,12 @@ class IncrementalDBSCAN:
 
     """
 
-    def __init__(self, eps=1, min_pts=5, eps_merge=None, metric='minkowski', p=2, nearest_neighbors='torch_cuda', eps_soft=None):
+    def __init__(self, eps=1, min_pts=5, eps_merge=None, min_cluster_size=1, metric='minkowski', p=2, nearest_neighbors='torch_cuda', eps_soft=None):
         self.eps = eps
         self.eps_merge = eps_merge if eps_merge is not None else eps
         self.eps_soft = eps_soft if eps_soft is not None else 2 * eps
         self.min_pts = min_pts
+        self.min_cluster_size = min_cluster_size
         self.metric = metric
         self.p = p
         self.nearest_neighbors = nearest_neighbors
@@ -85,9 +90,9 @@ class IncrementalDBSCAN:
         self._objects = Objects(self.eps, self.eps_merge, self.min_pts,
                                 self.metric, self.p, self.clusters, self.eps_soft, self.nearest_neighbors)
         self._inserter = Inserter(self.eps, self.eps_merge, self.min_pts,
-                                  self._objects)
+                                  self.min_cluster_size, self._objects)
         self._deleter = Deleter(self.eps, self.eps_merge, self.min_pts,
-                                self._objects)
+                                self.min_cluster_size, self._objects)
 
         # Soft clustering cache for fast probabilistic queries
         self._soft_clustering_cache = SoftClusteringCache(

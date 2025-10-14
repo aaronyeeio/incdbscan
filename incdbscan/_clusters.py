@@ -266,12 +266,14 @@ class Clusters:
         total_size = sum(c.size for c in self._clusters.values())
         total_cores = sum(c.core_count for c in self._clusters.values())
         total_borders = sum(c.border_count for c in self._clusters.values())
+        total_weight = sum(c.total_weight for c in self._clusters.values())
 
         return {
             'cluster_count': len(self._clusters),
             'total_objects': total_size,
             'total_cores': total_cores,
             'total_borders': total_borders,
+            'total_weight': total_weight,
             'clusters': {label: c.get_summary() for label, c in self._clusters.items()}
         }
 
@@ -287,6 +289,19 @@ class Clusters:
                 cluster = self._clusters.get(label)
                 if cluster:
                     cluster.update_member_core_status(obj)
+
+    def update_weight_for_objects(self, objects):
+        """Update weight statistics for objects whose weight has changed.
+
+        Args:
+            objects: Iterable of objects whose weight was updated
+        """
+        for obj in objects:
+            label = self._object_to_label.get(obj)
+            if label is not None and label >= CLUSTER_LABEL_FIRST_CLUSTER:
+                cluster = self._clusters.get(label)
+                if cluster:
+                    cluster.update_member_weight(obj)
 
     # ==================== High-Level Convenience Methods ====================
     # These methods handle both label changes and cluster operations
@@ -397,6 +412,24 @@ class Clusters:
         """
         # Return next label after the maximum ever used
         return max(self._max_cluster_label_ever_used + 1, CLUSTER_LABEL_FIRST_CLUSTER)
+
+    def dissolve_small_clusters(self, min_cluster_size: float):
+        """Dissolve clusters with total weight less than min_cluster_size.
+
+        Args:
+            min_cluster_size: Minimum total weight threshold
+        """
+        if min_cluster_size <= 0:
+            return
+
+        clusters_to_dissolve = [
+            cluster for cluster in self.get_all_clusters()
+            if cluster.total_weight < min_cluster_size
+        ]
+
+        for cluster in clusters_to_dissolve:
+            for obj in list(cluster.members):
+                self.set_label(obj, CLUSTER_LABEL_NOISE)
 
     def change_labels(self, change_from: ClusterLabel, change_to: ClusterLabel):
         """Change all objects from one label to another.

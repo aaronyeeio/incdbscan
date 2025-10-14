@@ -7,10 +7,11 @@ from ._clusters import CLUSTER_LABEL_NOISE
 
 
 class Deleter:
-    def __init__(self, eps, eps_merge, min_pts, objects):
+    def __init__(self, eps, eps_merge, min_pts, min_cluster_size, objects):
         self.eps = eps
         self.eps_merge = eps_merge
         self.min_pts = min_pts
+        self.min_cluster_size = min_cluster_size
         self.objects = objects
         self.clusters = objects.clusters  # Shorthand for clusters
 
@@ -69,18 +70,41 @@ class Deleter:
                 # Step 2: Trigger split hook to create clusters properly
                 self.clusters.split_cluster(original_label, new_components)
 
+                # Step 3: Clean up split clusters that have no core points
+                # After split, some clusters may only have border points if all cores lost core status
+                for new_label, members in new_components:
+                    has_core = any(obj.is_core for obj in members)
+                    if not has_core:
+                        # Convert all members to noise since there are no core points
+                        for obj in list(members):
+                            self.clusters.set_label(obj, CLUSTER_LABEL_NOISE)
+
         # Phase 5: Update labels of border objects that were in the neighborhood
         # of objects that lost their core property. They become either borders
         # of other clusters or noise.
-
         self._set_each_border_object_labels_to_largest_around(
             non_core_neighbors_of_ex_cores)
 
         # Phase 6: Update core status for all affected objects
-        # Remove objects that were completely deleted
+        # After deletions and label reassignments, ensure cluster statistics reflect current core status.
+        # This is done once here (instead of before splits) to cover all cases comprehensively.
         affected_objects_for_stats.difference_update(objects_removed)
         self.clusters.update_core_status_for_objects(
             affected_objects_for_stats)
+
+        # Phase 7: Final cleanup - remove clusters that have no core points
+        # After all reassignments, some clusters may only have border points.
+        # This happens when border points are assigned to clusters whose cores were all deleted.
+        clusters_to_check = list(self.clusters.get_all_clusters())
+        for cluster in clusters_to_check:
+            has_core = any(obj.is_core for obj in cluster.members)
+            if not has_core and cluster.size > 0:
+                # No core points means this is not a valid cluster by DBSCAN definition
+                for obj in list(cluster.members):
+                    self.clusters.set_label(obj, CLUSTER_LABEL_NOISE)
+
+        # Phase 8: Dissolve clusters that are smaller than min_cluster_size
+        self.clusters.dissolve_small_clusters(self.min_cluster_size)
 
     def _get_objects_that_lost_core_property_batch(self, objects_deleted,
                                                    weights, was_core_map):

@@ -22,11 +22,13 @@ class Cluster:
 
         # Statistics
         self.size: int = 0
+        self.total_weight: float = 0.0
         self.core_count: int = 0
         self.border_count: int = 0
 
-        # Track the core status when each object was added
+        # Track the core status and weight when each object was added
         self._member_core_status: dict = {}  # obj -> was_core_when_added
+        self._member_weight: dict = {}  # obj -> weight_when_added
 
         # Temporal information
         self.created_at: float = time.time()
@@ -54,7 +56,10 @@ class Cluster:
         self.size += delta
 
         if is_adding:
-            # When adding, record current core status and update counts
+            # When adding, record current weight and core status
+            self._member_weight[obj] = obj.weight
+            self.total_weight += obj.weight
+
             is_core = obj.is_core
             self._member_core_status[obj] = is_core
             if is_core:
@@ -62,7 +67,11 @@ class Cluster:
             else:
                 self.border_count += 1
         else:
-            # When removing, use the recorded core status from when it was added
+            # When removing, use the recorded weight from when it was added
+            weight_when_added = self._member_weight.pop(obj, obj.weight)
+            self.total_weight -= weight_when_added
+
+            # Use the recorded core status from when it was added
             was_core_when_added = self._member_core_status.pop(
                 obj, obj.is_core)
             if was_core_when_added:
@@ -166,7 +175,9 @@ class Cluster:
         # Clear all data
         self.members.clear()
         self._member_core_status.clear()
+        self._member_weight.clear()
         self.size = 0
+        self.total_weight = 0.0
         self.core_count = 0
         self.border_count = 0
 
@@ -198,6 +209,26 @@ class Cluster:
             self._member_core_status[obj] = new_is_core
             self.last_modified = time.time()
 
+    def update_member_weight(self, obj: 'Object'):
+        """Update the recorded weight of a member when it changes.
+
+        This should be called when an object's weight property changes
+        while it's already in the cluster (e.g., after weight update via insert).
+
+        Args:
+            obj: The object whose weight changed
+        """
+        if obj not in self._member_weight:
+            return
+
+        old_weight = self._member_weight[obj]
+        new_weight = obj.weight
+
+        if old_weight != new_weight:
+            self.total_weight = self.total_weight - old_weight + new_weight
+            self._member_weight[obj] = new_weight
+            self.last_modified = time.time()
+
     def get_summary(self) -> dict:
         """Get a summary of cluster state.
 
@@ -207,6 +238,7 @@ class Cluster:
         return {
             'label': self.label,
             'size': self.size,
+            'total_weight': self.total_weight,
             'core_count': self.core_count,
             'border_count': self.border_count,
             'created_at': self.created_at,
@@ -222,4 +254,5 @@ class Cluster:
 
     def __repr__(self):
         return (f"Cluster(label={self.label}, size={self.size}, "
+                f"weight={self.total_weight:.2f}, "
                 f"cores={self.core_count}, borders={self.border_count})")
