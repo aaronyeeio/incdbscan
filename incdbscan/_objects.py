@@ -20,18 +20,18 @@ if TYPE_CHECKING:
 
 
 class Objects:
-    def __init__(self, eps, eps_merge, min_pts, metric, p, clusters: 'Clusters'):
+    def __init__(self, eps, eps_merge, min_pts, metric, p, clusters: 'Clusters', eps_soft):
         self.clusters = clusters
 
         self.merge_graph = rx.PyGraph(
             multigraph=False)  # pylint: disable=no-member
         self._object_id_to_node_id: Dict[ObjectId, NodeId] = {}
 
-        self.neighbor_searcher = \
-            NeighborSearcher(radius=eps, metric=metric, p=p)
-        self.merge_searcher = \
-            NeighborSearcher(radius=eps_merge, metric=metric, p=p)
+        self.neighbor_searcher = NeighborSearcher(metric=metric, p=p)
         self.min_pts = min_pts
+        self.eps = eps
+        self.eps_merge = eps_merge
+        self.eps_soft = eps_soft
 
     def get_object(self, value):
         object_id = hash_(value)
@@ -85,15 +85,14 @@ class Objects:
         if not new_objects:
             return [], weight_updated_objects
 
-        # Batch insert all new values into both searchers (rebuilds trees once each)
+        # Batch insert all new values into searcher (rebuilds tree once)
         self.neighbor_searcher.batch_insert(new_values, new_ids)
-        self.merge_searcher.batch_insert(new_values, new_ids)
 
         # Batch query neighbors for all new objects (both eps and eps_merge)
         all_neighbor_ids_list = self.neighbor_searcher.batch_query_neighbors(
-            new_values)
-        all_merge_neighbor_ids_list = self.merge_searcher.batch_query_neighbors(
-            new_values)
+            new_values, radius=self.eps)
+        all_merge_neighbor_ids_list = self.neighbor_searcher.batch_query_neighbors(
+            new_values, radius=self.eps_merge)
 
         # Build lookup for new object indices
         new_obj_id_to_index = {obj.id: i for i, obj in enumerate(new_objects)}
@@ -222,11 +221,10 @@ class Objects:
                 if neighbor.id != obj.id:
                     neighbor.merge_neighbors.remove(obj)
 
-        # Batch delete from both neighbor searchers (rebuild trees only once each)
+        # Batch delete from neighbor searcher (rebuild tree only once)
         if objects_to_remove:
             ids_to_remove = [obj.id for obj in objects_to_remove]
             self.neighbor_searcher.batch_delete(ids_to_remove)
-            self.merge_searcher.batch_delete(ids_to_remove)
 
         # Remove graph metadata and labels
         for obj in objects_to_remove:

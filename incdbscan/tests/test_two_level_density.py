@@ -318,12 +318,12 @@ class TestEdgeCases:
         assert_cluster_labels(dbscan, point, CLUSTER_LABEL_NOISE)
 
     def test_empty_insertion(self):
-        """Test that empty insertion raises appropriate error."""
+        """Test that empty insertion is handled gracefully."""
         dbscan = IncrementalDBSCAN(eps=1.0, min_pts=3, eps_merge=0.5)
         empty = np.array([]).reshape(0, 2)
-        # sklearn validation requires at least 1 sample
-        with pytest.raises(ValueError, match="minimum of 1 is required"):
-            dbscan.insert(empty)
+        # Empty insertion should be allowed and do nothing
+        dbscan.insert(empty)
+        assert len(dbscan.get_cluster_labels(empty)) == 0
 
     def test_duplicate_points(self):
         """Test handling of duplicate points."""

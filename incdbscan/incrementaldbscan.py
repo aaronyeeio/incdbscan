@@ -49,6 +49,11 @@ class IncrementalDBSCAN:
     p : float or int, optional (default=2)
         Parameter for Minkowski distance if metric='minkowski'.
 
+    eps_soft : float, optional (default=None)
+        The radius for soft clustering queries. If None, defaults to 2*eps.
+        Typically set larger than eps to capture broader context for 
+        probabilistic cluster assignment.
+
     References
     ----------
     Ester et al. 1998. Incremental Clustering for Mining in a Data Warehousing
@@ -57,9 +62,10 @@ class IncrementalDBSCAN:
 
     """
 
-    def __init__(self, eps=1, min_pts=5, eps_merge=None, metric='minkowski', p=2):
+    def __init__(self, eps=1, min_pts=5, eps_merge=None, metric='minkowski', p=2, eps_soft=None):
         self.eps = eps
         self.eps_merge = eps_merge if eps_merge is not None else eps
+        self.eps_soft = eps_soft if eps_soft is not None else 2 * eps
         self.min_pts = min_pts
         self.metric = metric
         self.p = p
@@ -69,7 +75,7 @@ class IncrementalDBSCAN:
 
         self.clusters = Clusters()
         self._objects = Objects(self.eps, self.eps_merge, self.min_pts,
-                                self.metric, self.p, self.clusters)
+                                self.metric, self.p, self.clusters, self.eps_soft)
         self._inserter = Inserter(self.eps, self.eps_merge, self.min_pts,
                                   self._objects)
         self._deleter = Deleter(self.eps, self.eps_merge, self.min_pts,
@@ -226,6 +232,130 @@ class IncrementalDBSCAN:
                 Dictionary containing cluster statistics
         """
         return self.clusters.get_statistics()
+
+    def get_soft_labels(self, X, kernel='gaussian', include_noise_prob=True):
+        """Get soft cluster assignment probabilities for data points.
+
+        For each point, computes membership probability to each cluster based on
+        distance-weighted voting from nearby core points within eps_soft radius.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Query points to get soft labels for
+
+        kernel : str, optional (default='gaussian')
+            Distance weighting kernel. Options:
+            - 'gaussian': exp(-d^2 / (2*sigma^2)) where sigma = eps_soft/3
+            - 'inverse': 1 / (1 + d/eps_soft)
+            - 'linear': max(0, 1 - d/eps_soft)
+
+        include_noise_prob : bool, optional (default=True)
+            If True, includes probability of remaining noise as last column
+
+        Returns
+        -------
+        probabilities : ndarray of shape (n_samples, n_clusters) or
+                        (n_samples, n_clusters+1)
+            Soft cluster membership probabilities. If include_noise_prob=True,
+            last column is noise probability. Rows sum to 1.0.
+
+        cluster_labels : ndarray of shape (n_clusters,)
+            Cluster labels corresponding to columns (excluding noise column)
+        """
+        X = input_check(X)
+        n_samples = len(X)
+
+        # Get active cluster labels
+        active_clusters = self.clusters.get_all_clusters()
+        if not active_clusters:
+            # No clusters exist
+            if include_noise_prob:
+                return np.ones((n_samples, 1)), np.array([])
+            else:
+                return np.zeros((n_samples, 0)), np.array([])
+
+        cluster_labels = np.array(sorted([c.label for c in active_clusters]))
+        n_clusters = len(cluster_labels)
+        label_to_col = {label: i for i, label in enumerate(cluster_labels)}
+
+        # Check if we have any objects
+        if len(self._objects.neighbor_searcher.values) == 0:
+            # No objects in dataset
+            if include_noise_prob:
+                return np.ones((n_samples, 1)), cluster_labels
+            else:
+                return np.zeros((n_samples, 0)), cluster_labels
+
+        # Query neighbors with distances using neighbor_searcher
+        distances, neighbor_indices = \
+            self._objects.neighbor_searcher.neighbor_searcher.radius_neighbors(
+                X, radius=self.eps_soft, return_distance=True
+            )
+
+        # Compute weights using kernel function
+        sigma = self.eps_soft / 3.0  # For gaussian kernel
+
+        def compute_weight(dist):
+            if kernel == 'gaussian':
+                return np.exp(-dist**2 / (2 * sigma**2))
+            elif kernel == 'inverse':
+                return 1.0 / (1.0 + dist / self.eps_soft)
+            elif kernel == 'linear':
+                return np.maximum(0, 1.0 - dist / self.eps_soft)
+            else:
+                raise ValueError(f"Unknown kernel: {kernel}")
+
+        # Initialize probability matrix
+        if include_noise_prob:
+            probs = np.zeros((n_samples, n_clusters + 1))
+        else:
+            probs = np.zeros((n_samples, n_clusters))
+
+        # For each query point
+        for i in range(n_samples):
+            indices = neighbor_indices[i]
+            dists = distances[i]
+
+            # Collect core neighbors and their weights
+            cluster_weights = np.zeros(n_clusters)
+
+            for idx, dist in zip(indices, dists):
+                obj_id = self._objects.neighbor_searcher.ids[int(idx)]
+                obj = self._objects._get_object_from_object_id(obj_id)
+
+                # Only consider core points
+                if not obj.is_core:
+                    continue
+
+                label = self.clusters.get_label(obj)
+
+                # Only consider clustered core points
+                if label < 0:  # NOISE or UNCLASSIFIED
+                    continue
+
+                # Compute distance weight
+                weight = compute_weight(dist)
+
+                # Add weight to corresponding cluster
+                col_idx = label_to_col[label]
+                cluster_weights[col_idx] += weight
+
+            # Normalize to probabilities
+            total_weight = cluster_weights.sum()
+
+            if total_weight > 0:
+                probs[i, :n_clusters] = cluster_weights / total_weight
+                if include_noise_prob:
+                    # No noise probability if assigned to cluster
+                    probs[i, -1] = 0.0
+            else:
+                # No core neighbors found - remains noise
+                if include_noise_prob:
+                    probs[i, -1] = 1.0
+                # else: all zeros (no cluster membership)
+
+        return probs, cluster_labels
 
 
 class IncrementalDBSCANWarning(Warning):

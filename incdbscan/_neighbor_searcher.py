@@ -4,9 +4,9 @@ from sortedcontainers import SortedList
 
 
 class NeighborSearcher:
-    def __init__(self, radius, metric, p):
-        self.neighbor_searcher = \
-            NearestNeighbors(radius=radius, metric=metric, p=p)
+    def __init__(self, metric, p):
+        self.neighbor_searcher = NearestNeighbors(
+            metric=metric, p=p, n_jobs=-1)
         self.values = np.array([])
         self.ids = SortedList()
 
@@ -48,8 +48,12 @@ class NeighborSearcher:
             extended = extended.reshape(1, -1)
         self.values = extended
 
-    def batch_query_neighbors(self, query_values):
+    def batch_query_neighbors(self, query_values, radius):
         """Query neighbors for multiple points at once.
+
+        Args:
+            query_values: values to query
+            radius: search radius
 
         Returns: list of lists, where each inner list contains neighbor IDs
         """
@@ -57,7 +61,7 @@ class NeighborSearcher:
             return [[] for _ in range(len(query_values))]
 
         neighbor_indices_array = self.neighbor_searcher.radius_neighbors(
-            query_values, return_distance=False)
+            query_values, radius=radius, return_distance=False)
 
         result = []
         for neighbor_indices in neighbor_indices_array:
