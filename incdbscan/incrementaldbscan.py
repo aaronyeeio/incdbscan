@@ -108,13 +108,16 @@ class IncrementalDBSCAN:
 
         return self
 
-    def delete(self, X):
+    def delete(self, X, sample_weight=None):
         """Delete objects from object set, then update clustering.
 
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
             The data objects to be deleted from the object set.
+
+        sample_weight : array-like of shape (n_samples,), optional (default=None)
+            Weight of each sample. If None, all samples have weight 1.
 
         Returns
         -------
@@ -123,25 +126,28 @@ class IncrementalDBSCAN:
         """
         X = input_check(X)
 
-        # Collect objects to delete and their weights
-        objects_to_delete = []
-        weights = []
-
-        for ix, value in enumerate(X):
-            obj = self._objects.get_object(value)
-
-            if obj:
-                objects_to_delete.append(obj)
-                weights.append(1.0)
-            else:
-                warnings.warn(
-                    IncrementalDBSCANWarning(
-                        f'Object at position {ix} was not deleted because '
-                        'there is no such object in the object set.'
-                    )
+        if sample_weight is None:
+            sample_weight = np.ones(len(X))
+        else:
+            sample_weight = np.asarray(sample_weight)
+            if len(sample_weight) != len(X):
+                raise ValueError(
+                    f'sample_weight has {len(sample_weight)} elements, '
+                    f'but X has {len(X)} samples.'
                 )
 
-        # Batch delete all objects at once
+        objects_to_delete = []
+        weights = []
+        for ix, value in enumerate(X):
+            obj = self._objects.get_object(value)
+            if obj:
+                objects_to_delete.append(obj)
+                weights.append(sample_weight[ix])
+            else:
+                warnings.warn(IncrementalDBSCANWarning(
+                    f'Object at position {ix} was not deleted because '
+                    'there is no such object in the object set.'))
+
         if objects_to_delete:
             self._deleter.batch_delete(objects_to_delete, weights)
 

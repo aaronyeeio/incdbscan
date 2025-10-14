@@ -14,29 +14,33 @@ class Inserter:
 
     def batch_insert(self, object_values, weights):
         """Insert multiple objects at once and update clustering."""
-        objects_inserted = self.objects.batch_insert_objects(
+        new_objects, weight_updated_objects = self.objects.batch_insert_objects(
             object_values, weights)
 
-        if not objects_inserted:
-            # All objects already existed, no new objects to cluster
+        # Combine all objects that need clustering update
+        objects_to_process = new_objects + weight_updated_objects
+
+        if not objects_to_process:
+            # Nothing to process
             return
 
-        # Collect all affected objects (new objects + their neighbors)
-        all_affected_objects = set(objects_inserted)
-        for obj in objects_inserted:
+        # Collect all affected objects (processed objects + their neighbors)
+        all_affected_objects = set(objects_to_process)
+        for obj in objects_to_process:
             all_affected_objects.update(obj.neighbors)
 
         # Track existing neighbors for core status update
-        existing_neighbors = all_affected_objects - set(objects_inserted)
+        # These are neighbors that were not newly inserted or weight-updated in this batch
+        existing_neighbors = all_affected_objects - set(objects_to_process)
 
         # Identify new cores and old cores among ALL affected objects
         new_core_neighbors, old_core_neighbors = \
             self._separate_core_neighbors_by_novelty_batch(
-                objects_inserted, all_affected_objects)
+                objects_to_process, all_affected_objects)
 
         if not new_core_neighbors:
-            # No new core objects created, just assign labels to new objects
-            for obj in objects_inserted:
+            # No new core objects created, just assign labels to processed objects
+            for obj in objects_to_process:
                 # Find core neighbors of this object
                 core_neighbors = [n for n in obj.neighbors
                                   if n.neighbor_count >= self.min_pts and n != obj]
@@ -94,8 +98,8 @@ class Inserter:
         self._set_cluster_label_around_new_core_neighbors(new_core_neighbors)
 
         # After processing core objects, handle any remaining UNCLASSIFIED objects
-        # that were inserted but not assigned a label yet
-        for obj in objects_inserted:
+        # that were processed but not assigned a label yet
+        for obj in objects_to_process:
             if self.clusters.get_label(obj) == CLUSTER_LABEL_UNCLASSIFIED:
                 # Find core neighbors
                 core_neighbors = [n for n in obj.neighbors
@@ -115,23 +119,28 @@ class Inserter:
         # Update core status for existing neighbors that might have changed
         self.clusters.update_core_status_for_objects(existing_neighbors)
 
-    def _separate_core_neighbors_by_novelty_batch(self, objects_inserted, all_affected_objects):
-        """Identify new cores and old cores among all affected objects during batch insert."""
+    def _separate_core_neighbors_by_novelty_batch(self, objects_to_process, all_affected_objects):
+        """Identify new cores and old cores among all affected objects during batch insert.
+
+        Args:
+            objects_to_process: Objects that were newly inserted or had weight updates
+            all_affected_objects: All objects affected by the insertion (including neighbors)
+        """
         new_cores = set()
         old_cores = set()
-        objects_inserted_set = set(objects_inserted)
+        objects_to_process_set = set(objects_to_process)
 
         for obj in all_affected_objects:
             if obj.neighbor_count == self.min_pts:
-                # Just became a core
+                # Just became a core (neighbor_count exactly equals min_pts)
                 new_cores.add(obj)
             elif obj.neighbor_count > self.min_pts:
-                # Was already a core, but check if it's a newly inserted object
-                if obj in objects_inserted_set:
-                    # Newly inserted object that is core -> treat as new core
+                # Has neighbor_count > min_pts
+                if obj in objects_to_process_set:
+                    # Object was newly inserted or had weight update -> treat as new core
                     new_cores.add(obj)
                 else:
-                    # Was core before this batch insertion
+                    # Was core before this batch operation
                     old_cores.add(obj)
 
         return new_cores, old_cores
@@ -177,6 +186,20 @@ class Inserter:
         return effective_cluster_labels
 
     def _set_cluster_label_around_new_core_neighbors(self, new_core_neighbors):
+        # Collect all candidate labels for each neighbor
+        # For batch insertions, we want to assign the minimum label (sklearn behavior)
+        # For incremental insertions, neighbors should switch to their core neighbors' clusters
+        neighbor_candidate_labels = {}
+
         for obj in new_core_neighbors:
             label = self.clusters.get_label(obj)
-            self.clusters.set_labels(obj.neighbors, label)
+            for neighbor in obj.neighbors:
+                if neighbor not in neighbor_candidate_labels:
+                    neighbor_candidate_labels[neighbor] = []
+                neighbor_candidate_labels[neighbor].append(label)
+
+        # Assign labels: use minimum for batch consistency with sklearn
+        for neighbor, candidate_labels in neighbor_candidate_labels.items():
+            # Get the minimum label from all new core neighbors of this neighbor
+            min_label = min(candidate_labels)
+            self.clusters.set_label(neighbor, min_label)

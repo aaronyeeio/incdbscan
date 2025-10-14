@@ -41,7 +41,13 @@ class Objects:
         return None
 
     def batch_insert_objects(self, values, weights):
-        """Insert multiple objects at once, handling neighbor relationships efficiently."""
+        """Insert multiple objects at once, handling neighbor relationships efficiently.
+
+        Returns:
+            tuple: (new_objects, weight_updated_objects)
+                - new_objects: list of newly created Object instances
+                - weight_updated_objects: list of existing Object instances whose weights were updated
+        """
         object_ids = [hash_(value) for value in values]
 
         # Group duplicates: accumulate weights for same object_id
@@ -57,6 +63,7 @@ class Objects:
         new_objects = []
         new_values = []
         new_ids = []
+        weight_updated_objects = []
 
         for object_id, (value, total_weight) in id_info.items():
             if object_id in self._object_id_to_node_id:
@@ -65,6 +72,7 @@ class Objects:
                 obj.weight += total_weight
                 for neighbor in obj.neighbors:
                     neighbor.neighbor_count += total_weight
+                weight_updated_objects.append(obj)
             else:
                 # New object
                 new_obj = Object(object_id, self.min_pts, total_weight)
@@ -75,7 +83,7 @@ class Objects:
                 new_ids.append(object_id)
 
         if not new_objects:
-            return []
+            return [], weight_updated_objects
 
         # Batch insert all new values into both searchers (rebuilds trees once each)
         self.neighbor_searcher.batch_insert(new_values, new_ids)
@@ -140,7 +148,7 @@ class Objects:
                     self.merge_graph.add_edge(
                         new_obj.node_id, neighbor_obj.node_id, None)
 
-        return new_objects
+        return new_objects, weight_updated_objects
 
     def _insert_graph_metadata(self, new_object):
         node_id = self.merge_graph.add_node(new_object)
