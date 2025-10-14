@@ -6,6 +6,7 @@ from ._clusters import Clusters
 from ._deleter import Deleter
 from ._inserter import Inserter
 from ._objects import Objects
+from ._soft_clustering import SoftClusteringCache
 from ._utils import input_check
 
 
@@ -81,6 +82,10 @@ class IncrementalDBSCAN:
         self._deleter = Deleter(self.eps, self.eps_merge, self.min_pts,
                                 self._objects)
 
+        # Soft clustering cache for fast probabilistic queries
+        self._soft_clustering_cache = SoftClusteringCache(
+            self._objects, self.clusters)
+
     def insert(self, X, sample_weight=None):
         """Insert objects into the object set, then update clustering.
 
@@ -111,6 +116,9 @@ class IncrementalDBSCAN:
 
         # Use batch insertion for all cases
         self._inserter.batch_insert(X, sample_weight)
+
+        # Incrementally update soft clustering cache
+        self._soft_clustering_cache.update_after_insert()
 
         return self
 
@@ -155,7 +163,13 @@ class IncrementalDBSCAN:
                     'there is no such object in the object set.'))
 
         if objects_to_delete:
+            # Collect deleted object IDs
+            deleted_ids = [obj.id for obj in objects_to_delete]
+
             self._deleter.batch_delete(objects_to_delete, weights)
+
+            # Incrementally update soft clustering cache
+            self._soft_clustering_cache.update_after_delete(deleted_ids)
 
         return self
 
@@ -264,98 +278,10 @@ class IncrementalDBSCAN:
             Cluster labels corresponding to columns (excluding noise column)
         """
         X = input_check(X)
-        n_samples = len(X)
 
-        # Get active cluster labels
-        active_clusters = self.clusters.get_all_clusters()
-        if not active_clusters:
-            # No clusters exist
-            if include_noise_prob:
-                return np.ones((n_samples, 1)), np.array([])
-            else:
-                return np.zeros((n_samples, 0)), np.array([])
-
-        cluster_labels = np.array(sorted([c.label for c in active_clusters]))
-        n_clusters = len(cluster_labels)
-        label_to_col = {label: i for i, label in enumerate(cluster_labels)}
-
-        # Check if we have any objects
-        if len(self._objects.neighbor_searcher.values) == 0:
-            # No objects in dataset
-            if include_noise_prob:
-                return np.ones((n_samples, 1)), cluster_labels
-            else:
-                return np.zeros((n_samples, 0)), cluster_labels
-
-        # Query neighbors with distances using neighbor_searcher
-        distances, neighbor_indices = \
-            self._objects.neighbor_searcher.neighbor_searcher.radius_neighbors(
-                X, radius=self.eps_soft, return_distance=True
-            )
-
-        # Compute weights using kernel function
-        sigma = self.eps_soft / 3.0  # For gaussian kernel
-
-        def compute_weight(dist):
-            if kernel == 'gaussian':
-                return np.exp(-dist**2 / (2 * sigma**2))
-            elif kernel == 'inverse':
-                return 1.0 / (1.0 + dist / self.eps_soft)
-            elif kernel == 'linear':
-                return np.maximum(0, 1.0 - dist / self.eps_soft)
-            else:
-                raise ValueError(f"Unknown kernel: {kernel}")
-
-        # Initialize probability matrix
-        if include_noise_prob:
-            probs = np.zeros((n_samples, n_clusters + 1))
-        else:
-            probs = np.zeros((n_samples, n_clusters))
-
-        # For each query point
-        for i in range(n_samples):
-            indices = neighbor_indices[i]
-            dists = distances[i]
-
-            # Collect core neighbors and their weights
-            cluster_weights = np.zeros(n_clusters)
-
-            for idx, dist in zip(indices, dists):
-                obj_id = self._objects.neighbor_searcher.ids[int(idx)]
-                obj = self._objects._get_object_from_object_id(obj_id)
-
-                # Only consider core points
-                if not obj.is_core:
-                    continue
-
-                label = self.clusters.get_label(obj)
-
-                # Only consider clustered core points
-                if label < 0:  # NOISE or UNCLASSIFIED
-                    continue
-
-                # Compute distance weight
-                weight = compute_weight(dist)
-
-                # Add weight to corresponding cluster
-                col_idx = label_to_col[label]
-                cluster_weights[col_idx] += weight
-
-            # Normalize to probabilities
-            total_weight = cluster_weights.sum()
-
-            if total_weight > 0:
-                probs[i, :n_clusters] = cluster_weights / total_weight
-                if include_noise_prob:
-                    # No noise probability if assigned to cluster
-                    probs[i, -1] = 0.0
-            else:
-                # No core neighbors found - remains noise
-                if include_noise_prob:
-                    probs[i, -1] = 1.0
-                # else: all zeros (no cluster membership)
-
-        return probs, cluster_labels
+        return self._soft_clustering_cache.get_soft_labels(
+            X, self.eps_soft, kernel=kernel, include_noise_prob=include_noise_prob
+        )
 
 
 class IncrementalDBSCANWarning(Warning):
