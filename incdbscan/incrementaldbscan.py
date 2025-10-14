@@ -254,7 +254,7 @@ class IncrementalDBSCAN:
         """
         return self.clusters.get_statistics()
 
-    def get_soft_labels(self, X, kernel='gaussian', include_noise_prob=True):
+    def get_soft_labels(self, X, kernel='gaussian', include_noise_prob=True, target_clusters=None):
         """Get soft cluster assignment probabilities for data points.
 
         For each point, computes membership probability to each cluster based on
@@ -274,6 +274,10 @@ class IncrementalDBSCAN:
         include_noise_prob : bool, optional (default=True)
             If True, includes probability of remaining noise as last column
 
+        target_clusters : array-like or None, optional (default=None)
+            Specific cluster labels to compute probabilities for. If None,
+            computes for all active clusters.
+
         Returns
         -------
         probabilities : ndarray of shape (n_samples, n_clusters) or
@@ -287,7 +291,8 @@ class IncrementalDBSCAN:
         X = input_check(X)
 
         return self._soft_clustering_cache.get_soft_labels(
-            X, self.eps_soft, kernel=kernel, include_noise_prob=include_noise_prob
+            X, self.eps_soft, kernel=kernel, include_noise_prob=include_noise_prob,
+            target_clusters=target_clusters
         )
 
 

@@ -102,7 +102,7 @@ class SoftClusteringCache:
             if obj_id in self._core_label_cache:
                 self._index_to_label[idx] = self._core_label_cache[obj_id]
 
-    def get_soft_labels(self, X, eps_soft, kernel='gaussian', include_noise_prob=True):
+    def get_soft_labels(self, X, eps_soft, kernel='gaussian', include_noise_prob=True, target_clusters=None):
         """Get soft cluster assignment probabilities for data points.
 
         For each point, computes membership probability to each cluster based on
@@ -125,6 +125,10 @@ class SoftClusteringCache:
         include_noise_prob : bool, optional (default=True)
             If True, includes probability of remaining noise as last column
 
+        target_clusters : array-like or None, optional (default=None)
+            Specific cluster labels to compute probabilities for. If None,
+            computes for all active clusters.
+
         Returns
         -------
         probabilities : ndarray of shape (n_samples, n_clusters) or
@@ -146,14 +150,32 @@ class SoftClusteringCache:
             else:
                 return np.zeros((n_samples, 0)), np.array([])
 
-        cluster_labels = np.array(sorted([c.label for c in active_clusters]))
+        all_active_labels = np.array(
+            sorted([c.label for c in active_clusters]))
+
+        # Filter to target clusters if specified
+        if target_clusters is not None:
+            target_clusters = np.asarray(target_clusters)
+            active_labels_set = set(all_active_labels)
+            cluster_labels = np.array(
+                sorted([label for label in target_clusters if label in active_labels_set]))
+            if len(cluster_labels) == 0:
+                # No valid target clusters
+                if include_noise_prob:
+                    return np.ones((n_samples, 1)), np.array([])
+                else:
+                    return np.zeros((n_samples, 0)), np.array([])
+        else:
+            cluster_labels = all_active_labels
         n_clusters = len(cluster_labels)
 
         # Build fast label-to-column mapping array
-        max_label = cluster_labels.max() if len(cluster_labels) > 0 else 0
+        # Use max of all active labels to handle neighbors from non-target clusters
+        max_label = int(all_active_labels.max()) if len(
+            all_active_labels) > 0 else 0
         label_to_col_array = np.full(max_label + 1, -1, dtype=np.int32)
         for i, label in enumerate(cluster_labels):
-            label_to_col_array[label] = i
+            label_to_col_array[int(label)] = i
 
         # Check if we have any objects
         if len(self.objects.neighbor_searcher.values) == 0:
@@ -215,9 +237,21 @@ class SoftClusteringCache:
             # Map labels to column indices using array lookup
             col_indices = label_to_col_array[core_labels]
 
+            # Filter out labels not in target clusters (col_indices == -1)
+            valid_mask = col_indices >= 0
+            if valid_mask.any():
+                valid_col_indices = col_indices[valid_mask]
+                valid_weights = weights[valid_mask]
+            else:
+                valid_col_indices = np.array([], dtype=np.int32)
+                valid_weights = np.array([])
+
             # Accumulate weights per cluster using bincount
-            cluster_weights = np.bincount(
-                col_indices, weights=weights, minlength=n_clusters)
+            if len(valid_col_indices) > 0:
+                cluster_weights = np.bincount(
+                    valid_col_indices, weights=valid_weights, minlength=n_clusters)
+            else:
+                cluster_weights = np.zeros(n_clusters)
 
             # Normalize to probabilities
             total_weight = cluster_weights.sum()
