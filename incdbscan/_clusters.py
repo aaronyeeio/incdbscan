@@ -413,18 +413,18 @@ class Clusters:
         # Return next label after the maximum ever used
         return max(self._max_cluster_label_ever_used + 1, CLUSTER_LABEL_FIRST_CLUSTER)
 
-    def dissolve_small_clusters(self, min_cluster_size: float):
-        """Dissolve clusters with total weight less than min_cluster_size.
+    def dissolve_small_clusters(self, min_cluster_size: int):
+        """Dissolve clusters with fewer points than min_cluster_size.
 
         Args:
-            min_cluster_size: Minimum total weight threshold
+            min_cluster_size: Minimum number of points threshold
         """
         if min_cluster_size <= 0:
             return
 
         clusters_to_dissolve = [
             cluster for cluster in self.get_all_clusters()
-            if cluster.total_weight < min_cluster_size
+            if cluster.size < min_cluster_size
         ]
 
         for cluster in clusters_to_dissolve:

@@ -35,9 +35,9 @@ class IncrementalDBSCAN:
         The minimum sum of neighbor weights that an object needs to have to be a
         core object of a cluster.
 
-    min_cluster_size : int or float, optional (default=1)
-        The minimum total weight sum that a cluster needs to have. Clusters with
-        total weight less than this value will be dissolved and marked as noise.
+    min_cluster_size : int, optional (default=1)
+        The minimum number of points that a cluster needs to have. Clusters with
+        fewer points than this value will be dissolved and marked as noise.
 
     metric : string or callable, optional (default='minkowski')
         The distance metric to use to calculate distance between data objects.
@@ -357,28 +357,28 @@ class IncrementalDBSCAN:
 
         # Precompute cumulative statistics for candidates
         cumulative_cores = []
-        cumulative_weight = []
+        cumulative_size = []
 
         cores_so_far = 0
-        weight_so_far = 0.0
+        size_so_far = 0
 
         for obj in candidates:
             cores_so_far += 1 if obj.is_core else 0
-            weight_so_far += obj.weight
+            size_so_far += 1
             cumulative_cores.append(cores_so_far)
-            cumulative_weight.append(weight_so_far)
+            cumulative_size.append(size_so_far)
 
         # Find maximum evictable count by checking from k down to 0
         # remaining_cores = cluster.core_count - cumulative_cores[i-1]
-        # remaining_weight = cluster.total_weight - cumulative_weight[i-1]
+        # remaining_size = cluster.size - cumulative_size[i-1]
         for i in range(k, 0, -1):
             evict_cores = cumulative_cores[i - 1]
-            evict_weight = cumulative_weight[i - 1]
+            evict_size = cumulative_size[i - 1]
 
             remaining_cores = cluster.core_count - evict_cores
-            remaining_weight = cluster.total_weight - evict_weight
+            remaining_size = cluster.size - evict_size
 
-            if remaining_cores > 0 and remaining_weight >= self.min_cluster_size:
+            if remaining_cores > 0 and remaining_size >= self.min_cluster_size:
                 return candidates[:i]
 
         return []
@@ -540,9 +540,9 @@ class IncrementalDBSCAN:
 
         # Verify final component forms a valid cluster using O(k) statistics
         component_cores = sum(1 for obj in final_component if obj.is_core)
-        component_weight = sum(obj.weight for obj in final_component)
+        component_size = len(final_component)
 
-        if component_cores == 0 or component_weight < self.min_cluster_size:
+        if component_cores == 0 or component_size < self.min_cluster_size:
             # Component too small - don't evict anything
             return []
 
