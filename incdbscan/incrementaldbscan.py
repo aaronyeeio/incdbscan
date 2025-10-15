@@ -310,7 +310,7 @@ class IncrementalDBSCAN:
 
         Notes
         -----
-        Evicted points are marked as noise (label=-1). The algorithm guarantees
+        Evicted points are deleted from the object set. The algorithm guarantees
         that the cluster will not split into disconnected components.
 
         Time complexity: O(V + E) where V is the number of core points and E
@@ -323,11 +323,10 @@ class IncrementalDBSCAN:
         # Find points that can be safely evicted
         evict_candidates = self._find_evictable_points(cluster, n)
 
-        # Mark evicted points as noise and collect their IDs
-        evicted_ids = []
-        for obj in evict_candidates:
-            self.clusters.set_label(obj, CLUSTER_LABEL_NOISE)
-            evicted_ids.append(obj.id)
+        # Delete evicted points
+        evicted_ids = [obj.id for obj in evict_candidates]
+        if evicted_ids:
+            self.delete(evicted_ids)
 
         return evicted_ids
 

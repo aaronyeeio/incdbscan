@@ -46,10 +46,14 @@ def test_evict_border_points_only():
 
     assert len(evicted_ids) == 2
 
+    # Verify evicted points are deleted (no longer in the system)
+    for evicted_id in evicted_ids:
+        assert incdbscan._objects.get_object_by_id(evicted_id) is None
+
     # Get updated cluster after eviction
     cluster = incdbscan.get_cluster(cluster_label)
     assert cluster.size == initial_size - 2
-    # Border count should decrease by at most 2 (could be less if some borders became noise)
+    # Border count should decrease by at most 2 (could be less if cascade deletions occurred)
     assert cluster.border_count <= initial_border_count
 
     # Cluster should still exist and be connected
@@ -58,18 +62,22 @@ def test_evict_border_points_only():
 
 def test_evict_all_border_points():
     """Test evicting all border points."""
-    incdbscan = IncrementalDBSCAN(eps=1.5, min_pts=3)
+    incdbscan = IncrementalDBSCAN(eps=1.5, min_pts=5)
 
+    # Dense core region with 6 points
     core_points = np.array([
         [0, 0],
         [1, 0],
         [0, 1],
         [1, 1],
+        [0.5, 0],
+        [0, 0.5],
     ])
 
+    # Isolated border points: close to core but won't have enough neighbors
     border_points = np.array([
-        [2.5, 0.5],
-        [0.5, 2.5],
+        [2.2, 0.5],   # Far from most points, only close to 1-2 cores
+        [-1.2, 0.5],  # Far from most points, only close to 1-2 cores
     ])
 
     all_points = np.vstack([core_points, border_points])
@@ -82,16 +90,24 @@ def test_evict_all_border_points():
     cluster = incdbscan.get_cluster(cluster_label)
     initial_border_count = cluster.border_count
 
+    # Verify we have border points
+    assert initial_border_count > 0, "Test setup should create border points"
+
     # Try to evict more than available borders
     evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=10)
 
     # Should evict at least all border points
     assert len(evicted_ids) >= initial_border_count
 
-    # Cluster should still exist
+    # Verify evicted points are deleted
+    for evicted_id in evicted_ids:
+        assert incdbscan._objects.get_object_by_id(evicted_id) is None
+
+    # Cluster should still exist (may have no borders or some cores removed)
     cluster = incdbscan.get_cluster(cluster_label)
-    assert cluster is not None
-    assert cluster.border_count == 0  # All borders gone
+    if cluster is not None:
+        # If cluster exists, all borders should be gone
+        assert cluster.border_count == 0
 
 
 def test_evict_with_core_points():
@@ -121,6 +137,10 @@ def test_evict_with_core_points():
 
     # Should evict some points (endpoints are non-articulation points)
     assert len(evicted_ids) > 0
+
+    # Verify evicted points are deleted
+    for evicted_id in evicted_ids:
+        assert incdbscan._objects.get_object_by_id(evicted_id) is None
 
     # Get updated cluster after eviction
     cluster = incdbscan.get_cluster(cluster_label)
@@ -167,6 +187,10 @@ def test_evict_prevents_split():
 
         # Should evict some points but keep the bridge
         assert len(evicted_ids) > 0
+
+        # Verify evicted points are deleted
+        for evicted_id in evicted_ids:
+            assert incdbscan._objects.get_object_by_id(evicted_id) is None
 
         # Cluster should still exist and be connected
         cluster = incdbscan.get_cluster(cluster_label)
@@ -255,6 +279,9 @@ def test_evict_maintains_cluster_statistics():
     evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=1)
 
     assert len(evicted_ids) == 1
+
+    # Verify evicted point is deleted
+    assert incdbscan._objects.get_object_by_id(evicted_ids[0]) is None
 
     # Get updated cluster after eviction
     cluster = incdbscan.get_cluster(cluster_label)

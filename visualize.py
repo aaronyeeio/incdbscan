@@ -522,6 +522,7 @@ def visualize_edge_eviction():
             cluster_step = dbscan_step.get_cluster(cluster_label_step)
 
             # Evict points
+            evicted_ids = []
             if n_evict > 0:
                 evicted_ids = dbscan_step.evict_from_cluster_edge(
                     cluster_label_step, n_evict)
@@ -529,12 +530,18 @@ def visualize_edge_eviction():
             else:
                 evicted_count = 0
 
-            # Get updated labels
-            labels_after = dbscan_step.get_cluster_labels(ids)
+            # Identify evicted points by ID
+            evicted_id_set = set(evicted_ids) if evicted_ids else set()
+            evicted_mask = np.array(
+                [ids[i] in evicted_id_set for i in range(len(ids))])
 
-            # Identify evicted points
-            evicted_mask = (labels_before >= 0) & (labels_after == -1)
-            remaining_mask = labels_after >= 0
+            # Get updated labels for remaining points
+            remaining_ids = [id_ for id_ in ids if id_ not in evicted_id_set]
+            labels_after = dbscan_step.get_cluster_labels(
+                remaining_ids) if remaining_ids else np.array([])
+
+            # Create remaining mask
+            remaining_mask = ~evicted_mask
 
             # Plot
             if np.any(remaining_mask):
@@ -633,6 +640,7 @@ def visualize_edge_eviction_detailed():
         initial_borders = cluster.border_count
 
         # Perform eviction
+        evicted_ids = []
         if n_evict > 0:
             evicted_ids = dbscan.evict_from_cluster_edge(
                 cluster_label, n_evict)
@@ -640,14 +648,16 @@ def visualize_edge_eviction_detailed():
         else:
             evicted_count = 0
 
-        labels_after = dbscan.get_cluster_labels(ids)
+        # Identify evicted points by ID
+        evicted_id_set = set(evicted_ids) if evicted_ids else set()
+        evicted_mask = np.array(
+            [ids[i] in evicted_id_set for i in range(len(ids))])
 
         # Categorize points
-        remaining_core = (labels_after >= 0) & core_mask
-        remaining_border = (labels_after >= 0) & border_mask
-        evicted_core = (labels_before >= 0) & (labels_after == -1) & core_mask
-        evicted_border = (labels_before >= 0) & (
-            labels_after == -1) & border_mask
+        remaining_core = (~evicted_mask) & core_mask
+        remaining_border = (~evicted_mask) & border_mask
+        evicted_core = evicted_mask & core_mask
+        evicted_border = evicted_mask & border_mask
 
         # Plot
         if np.any(remaining_core):
