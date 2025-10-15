@@ -1,8 +1,9 @@
 import warnings
 
 import numpy as np
+import rustworkx as rx
 
-from ._clusters import Clusters
+from ._clusters import Clusters, CLUSTER_LABEL_NOISE
 from ._deleter import Deleter
 from ._inserter import Inserter
 from ._objects import Objects
@@ -288,6 +289,268 @@ class IncrementalDBSCAN:
             X, self.eps_soft, kernel=kernel, include_noise_prob=include_noise_prob,
             target_clusters=target_clusters
         )
+
+    def evict_from_cluster_edge(self, cluster_label, n):
+        """Evict n points from cluster edge without causing cluster split.
+
+        This method removes up to n points from the cluster's boundary in a way
+        that guarantees the cluster remains connected. It prioritizes border
+        points (non-core) first, then uses articulation point detection to
+        safely remove core points that don't maintain cluster connectivity.
+
+        Parameters
+        ----------
+        cluster_label : int
+            The label of the cluster to evict points from
+
+        n : int
+            Maximum number of points to evict
+
+        Returns
+        -------
+        evicted_count : int
+            Actual number of points evicted (may be less than n if not enough
+            non-critical points exist)
+
+        Notes
+        -----
+        Evicted points are marked as noise (label=-1). The algorithm guarantees
+        that the cluster will not split into disconnected components.
+
+        Time complexity: O(V + E) where V is the number of core points and E
+        is the number of edges between core points.
+        """
+        cluster = self.clusters.get_cluster(cluster_label)
+        if not cluster or cluster.size == 0:
+            return 0
+
+        # Find points that can be safely evicted
+        evict_candidates = self._find_evictable_points(cluster, n)
+
+        # Mark evicted points as noise
+        for obj in evict_candidates:
+            self.clusters.set_label(obj, CLUSTER_LABEL_NOISE)
+
+        return len(evict_candidates)
+
+    def _find_max_evictable_with_stats(self, cluster, candidates, max_n):
+        """Find maximum number of candidates that can be evicted while preserving cluster.
+
+        Uses cumulative statistics to avoid recomputation. Time complexity: O(k) where
+        k = min(max_n, len(candidates)).
+
+        Parameters
+        ----------
+        cluster : Cluster
+            The cluster being processed
+        candidates : list
+            Candidate points for eviction, ordered by priority
+        max_n : int
+            Maximum number to try evicting
+
+        Returns
+        -------
+        list
+            Evictable points (may be empty if none can be evicted)
+        """
+        if not candidates:
+            return []
+
+        k = min(max_n, len(candidates))
+
+        # Precompute cumulative statistics for candidates
+        cumulative_cores = []
+        cumulative_weight = []
+
+        cores_so_far = 0
+        weight_so_far = 0.0
+
+        for obj in candidates:
+            cores_so_far += 1 if obj.is_core else 0
+            weight_so_far += obj.weight
+            cumulative_cores.append(cores_so_far)
+            cumulative_weight.append(weight_so_far)
+
+        # Find maximum evictable count by checking from k down to 0
+        # remaining_cores = cluster.core_count - cumulative_cores[i-1]
+        # remaining_weight = cluster.total_weight - cumulative_weight[i-1]
+        for i in range(k, 0, -1):
+            evict_cores = cumulative_cores[i - 1]
+            evict_weight = cumulative_weight[i - 1]
+
+            remaining_cores = cluster.core_count - evict_cores
+            remaining_weight = cluster.total_weight - evict_weight
+
+            if remaining_cores > 0 and remaining_weight >= self.min_cluster_size:
+                return candidates[:i]
+
+        return []
+
+    def _find_evictable_points(self, cluster, n):
+        """Find points to evict while ensuring a single cluster remains.
+
+        Strategy:
+        1. If n points can be evicted without touching articulation points,
+           evict those n points from the periphery.
+        2. If n points would require removing articulation points (causing split):
+           - Identify which components would result from removing safe points
+           - Keep only the largest/densest component
+           - Evict all points not in that component to maintain single cluster
+        3. If eviction would destroy the cluster entirely (no cores left),
+           return empty list to preserve cluster.
+
+        Points are prioritized by "peripherality":
+        - Border points (non-core) sorted by neighbor_count (ascending)
+        - Non-articulation core points sorted by neighbor_count (ascending)
+
+        Parameters
+        ----------
+        cluster : Cluster
+            The cluster to analyze
+
+        n : int
+            Target number of points to evict
+
+        Returns
+        -------
+        evict_candidates : list
+            List of Object instances to evict. May exceed n if the cluster
+            would split (keeps only densest component). May be less than n
+            or empty if evicting would destroy the cluster.
+        """
+        # Step 1: Collect and sort border points by peripherality
+        border_points = [obj for obj in cluster.members if not obj.is_core]
+        border_points.sort(key=lambda obj: obj.neighbor_count)
+
+        # Step 2: Handle core points
+        cores = [obj for obj in cluster.members if obj.is_core]
+
+        if len(cores) <= 1:
+            # Single core or no cores - can safely evict all border points
+            # and the single core if needed
+            all_evictable = border_points + cores
+            return all_evictable[:n]
+
+        # Step 3: Detect articulation points among core points
+        core_node_ids = [obj.node_id for obj in cores]
+        subgraph = self._objects.graph.subgraph(core_node_ids)
+        subgraph_articulation_indices = rx.articulation_points(subgraph)
+
+        # Map articulation points back to original objects
+        articulation_node_ids = set()
+        for subgraph_idx in subgraph_articulation_indices:
+            original_node_id = subgraph[subgraph_idx].node_id
+            articulation_node_ids.add(original_node_id)
+
+        articulation_cores = [
+            obj for obj in cores if obj.node_id in articulation_node_ids
+        ]
+        non_critical_cores = [
+            obj for obj in cores if obj.node_id not in articulation_node_ids
+        ]
+
+        # Sort non-critical cores by peripherality
+        non_critical_cores.sort(key=lambda obj: obj.neighbor_count)
+
+        # Step 4: Try evicting n points without touching articulation points
+        safe_evictable = border_points + non_critical_cores
+
+        if len(safe_evictable) >= n:
+            # Use cumulative stats to find maximum evictable
+            return self._find_max_evictable_with_stats(cluster, safe_evictable, n)
+
+        # Step 5: Would need to remove articulation points to reach n
+        # This would cause split into multiple components
+        # Strategy: Keep the largest/densest component, evict everything else
+
+        # Case 5a: No articulation points (all cores non-critical)
+        if not articulation_cores:
+            return self._find_max_evictable_with_stats(cluster, safe_evictable, len(safe_evictable))
+
+        # Case 5b: Check what happens if we remove all safe points
+        remaining_cores = set(cores) - set(safe_evictable)
+
+        if len(remaining_cores) <= 1:
+            # Would leave ≤1 core - try to evict as many safe points as possible
+            return self._find_max_evictable_with_stats(cluster, safe_evictable, len(safe_evictable))
+
+        # Case 5c: Check if remaining cores are still connected
+        remaining_core_node_ids = [obj.node_id for obj in remaining_cores]
+        remaining_subgraph = self._objects.graph.subgraph(
+            remaining_core_node_ids)
+        components_node_ids = rx.connected_components(remaining_subgraph)
+
+        if len(components_node_ids) == 1:
+            # Still connected - evict all safe points if possible
+            return self._find_max_evictable_with_stats(cluster, safe_evictable, len(safe_evictable))
+
+        # Case 5d: Multiple components - keep only the densest one
+        return self._shrink_to_best_component(
+            cluster, components_node_ids, remaining_subgraph,
+            non_critical_cores, border_points
+        )
+
+    def _shrink_to_best_component(self, cluster, components_node_ids,
+                                  remaining_subgraph, non_critical_cores, border_points):
+        """Shrink cluster to best component when split would occur.
+
+        Parameters
+        ----------
+        cluster : Cluster
+            The cluster being processed
+        components_node_ids : list
+            Connected components as lists of node IDs
+        remaining_subgraph : PyGraph
+            Subgraph of remaining cores
+        non_critical_cores : list
+            Non-articulation core points
+        border_points : list
+            Border points
+
+        Returns
+        -------
+        list
+            Points to evict (everything except best component)
+        """
+        # Map components from node IDs to objects
+        components_objects = []
+        for component_node_ids in components_node_ids:
+            component_cores = {
+                self._objects.graph[remaining_subgraph[subgraph_node_id].node_id]
+                for subgraph_node_id in component_node_ids
+            }
+            components_objects.append(component_cores)
+
+        # Select densest component (highest total neighbor_count)
+        best_core_component = max(
+            components_objects,
+            key=lambda comp: sum(obj.neighbor_count for obj in comp)
+        )
+
+        # Expand component: add connected non-critical cores
+        core_component = set(best_core_component)
+        for obj in non_critical_cores:
+            if any(neighbor in core_component for neighbor in obj.neighbors if neighbor.is_core):
+                core_component.add(obj)
+
+        # Expand component: add connected border points
+        border_component = {
+            obj for obj in border_points
+            if any(neighbor in core_component for neighbor in obj.neighbors)
+        }
+
+        final_component = core_component | border_component
+
+        # Verify final component forms a valid cluster using O(k) statistics
+        component_cores = sum(1 for obj in final_component if obj.is_core)
+        component_weight = sum(obj.weight for obj in final_component)
+
+        if component_cores == 0 or component_weight < self.min_cluster_size:
+            # Component too small - don't evict anything
+            return []
+
+        # Evict everything except the final component
+        return [obj for obj in cluster.members if obj not in final_component]
 
 
 class IncrementalDBSCANWarning(Warning):

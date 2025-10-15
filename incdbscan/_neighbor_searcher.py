@@ -86,9 +86,12 @@ class NeighborSearcher:
         neighbor_indices_array = self.neighbor_searcher.radius_neighbors(
             query_values, radius=radius, return_distance=False)
 
+        # Convert SortedList to numpy array for O(1) indexing instead of O(log n)
+        ids_array = np.array(self.ids)
+
         result = []
         for neighbor_indices in neighbor_indices_array:
-            result.append([self.ids[ix] for ix in neighbor_indices])
+            result.append([ids_array[ix] for ix in neighbor_indices])
         return result
 
     def batch_delete(self, ids_to_delete):

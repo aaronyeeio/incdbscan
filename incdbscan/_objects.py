@@ -95,10 +95,23 @@ class Objects:
         # Build lookup for new object indices
         new_obj_id_to_index = {obj.id: i for i, obj in enumerate(new_objects)}
 
+        # Build a fast lookup cache for all objects we'll need to access
+        # This avoids 1.9M+ calls to _get_object_from_object_id
+        all_unique_neighbor_ids = set()
+        for neighbor_ids in all_neighbor_ids_list:
+            all_unique_neighbor_ids.update(neighbor_ids)
+
+        object_cache = {}
+        for obj_id in all_unique_neighbor_ids:
+            object_cache[obj_id] = self._get_object_from_object_id(obj_id)
+
         # Update neighbor relationships
+        # Collect all edges to add them in batch (much faster than individual adds)
+        edges_to_add = []
+
         for i, (new_obj, neighbor_ids) in enumerate(zip(new_objects, all_neighbor_ids_list)):
             for neighbor_id in neighbor_ids:
-                neighbor_obj = self._get_object_from_object_id(neighbor_id)
+                neighbor_obj = object_cache[neighbor_id]
 
                 if neighbor_id == new_obj.id:
                     # Self-neighbor: increase own count
@@ -109,21 +122,25 @@ class Objects:
                     new_obj.neighbors.add(neighbor_obj)
                     neighbor_obj.neighbor_count += new_obj.weight
                     neighbor_obj.neighbors.add(new_obj)
-                    self.graph.add_edge(
-                        new_obj.node_id, neighbor_obj.node_id, None)
+                    edges_to_add.append(
+                        (new_obj.node_id, neighbor_obj.node_id, None))
                 elif neighbor_id in new_obj_id_to_index:
                     # New object already processed: only add to set and edge
                     new_obj.neighbors.add(neighbor_obj)
-                    self.graph.add_edge(
-                        new_obj.node_id, neighbor_obj.node_id, None)
+                    edges_to_add.append(
+                        (new_obj.node_id, neighbor_obj.node_id, None))
                 else:
                     # Existing object: update both sides and add edge
                     new_obj.neighbor_count += neighbor_obj.weight
                     new_obj.neighbors.add(neighbor_obj)
                     neighbor_obj.neighbor_count += new_obj.weight
                     neighbor_obj.neighbors.add(new_obj)
-                    self.graph.add_edge(
-                        new_obj.node_id, neighbor_obj.node_id, None)
+                    edges_to_add.append(
+                        (new_obj.node_id, neighbor_obj.node_id, None))
+
+        # Batch add all edges at once (much faster than individual add_edge calls)
+        if edges_to_add:
+            self.graph.add_edges_from(edges_to_add)
 
         return new_objects, weight_updated_objects
 
