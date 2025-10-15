@@ -8,7 +8,6 @@ class Object:
         self.node_id: NodeId = None
         self.weight = weight
         self.neighbors = {self}
-        self.merge_neighbors = {self}
         self.neighbor_count = 0
         self.min_pts = min_pts
 
