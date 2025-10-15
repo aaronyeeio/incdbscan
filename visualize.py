@@ -59,15 +59,18 @@ def visualize_soft_clustering_probabilities():
     eps_soft = 2.5
     min_pts = 3
 
+    # Generate IDs for data points
+    ids = [f"point_{i}" for i in range(len(X))]
+
     # Fit DBSCAN
     dbscan = IncrementalDBSCAN(
         eps=eps, min_pts=min_pts, eps_soft=eps_soft)
-    dbscan.insert(X)
+    dbscan.insert(X, ids=ids)
 
     # Get hard and soft labels
-    hard_labels = dbscan.get_cluster_labels(X)
+    hard_labels = dbscan.get_cluster_labels(ids)
     soft_probs, cluster_labels = dbscan.get_soft_labels(
-        X, kernel='gaussian', include_noise_prob=True)
+        ids, kernel='gaussian', include_noise_prob=True)
 
     n_clusters = len(cluster_labels)
 
@@ -174,16 +177,19 @@ def visualize_soft_clustering_rgb():
     eps_soft = 2.0
     min_pts = 3
 
+    # Generate IDs for data points
+    ids = [f"point_{i}" for i in range(len(X))]
+
     # Fit DBSCAN
     dbscan = IncrementalDBSCAN(
         eps=eps, min_pts=min_pts, eps_soft=eps_soft)
-    dbscan.insert(X)
+    dbscan.insert(X, ids=ids)
 
     # Get soft labels (without noise column for color mixing)
     soft_probs, cluster_labels = dbscan.get_soft_labels(
-        X, kernel='gaussian', include_noise_prob=False)
+        ids, kernel='gaussian', include_noise_prob=False)
 
-    hard_labels = dbscan.get_cluster_labels(X)
+    hard_labels = dbscan.get_cluster_labels(ids)
     n_clusters = len(cluster_labels)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
@@ -276,10 +282,13 @@ def visualize_soft_clustering_kernels():
     eps_soft = 2.0
     min_pts = 3
 
+    # Generate IDs for data points
+    ids = [f"point_{i}" for i in range(len(X))]
+
     # Fit DBSCAN
     dbscan = IncrementalDBSCAN(
         eps=eps, min_pts=min_pts, eps_soft=eps_soft)
-    dbscan.insert(X)
+    dbscan.insert(X, ids=ids)
 
     kernels = ['gaussian', 'inverse', 'linear']
 
@@ -287,7 +296,7 @@ def visualize_soft_clustering_kernels():
 
     for idx, kernel in enumerate(kernels):
         soft_probs, cluster_labels = dbscan.get_soft_labels(
-            X, kernel=kernel, include_noise_prob=False)
+            ids, kernel=kernel, include_noise_prob=False)
 
         n_clusters = len(cluster_labels)
 
@@ -346,24 +355,38 @@ def visualize_soft_clustering_boundary():
     eps_soft = 2.5
     min_pts = 3
 
+    # Generate IDs for data points
+    ids = [f"point_{i}" for i in range(len(X))]
+
     # Fit DBSCAN
     dbscan = IncrementalDBSCAN(
         eps=eps, min_pts=min_pts, eps_soft=eps_soft)
-    dbscan.insert(X)
+    dbscan.insert(X, ids=ids)
 
     # Create a grid of query points
+    # Use smaller grid (50x50 = 2500 points) to avoid performance issues with insertion
     x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
     y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
 
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 200),
-                         np.linspace(y_min, y_max, 200))
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 50),
+                         np.linspace(y_min, y_max, 50))
     grid_points = np.c_[xx.ravel(), yy.ravel()]
+
+    # Generate IDs for grid points
+    grid_ids = [f"grid_{i}" for i in range(len(grid_points))]
+
+    # Insert grid points temporarily to get soft labels
+    # Note: This is necessary because get_soft_labels requires IDs to be in the system
+    dbscan.insert(grid_points, ids=grid_ids)
 
     # Get soft labels for grid
     soft_probs_grid, cluster_labels = dbscan.get_soft_labels(
-        grid_points, kernel='gaussian', include_noise_prob=True)
+        grid_ids, kernel='gaussian', include_noise_prob=True)
 
-    hard_labels = dbscan.get_cluster_labels(X)
+    # Delete grid points to restore original clustering
+    dbscan.delete(grid_ids)
+
+    hard_labels = dbscan.get_cluster_labels(ids)
     n_clusters = len(cluster_labels)
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -463,11 +486,14 @@ def visualize_edge_eviction():
     fig = plt.figure(figsize=(18, 15))
 
     for shape_idx, (shape_name, X, eps, min_pts) in enumerate(shapes):
+        # Generate IDs for data points
+        ids = [f"point_{i}" for i in range(len(X))]
+
         # Initialize DBSCAN
         dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-        dbscan.insert(X)
+        dbscan.insert(X, ids=ids)
 
-        initial_labels = dbscan.get_cluster_labels(X)
+        initial_labels = dbscan.get_cluster_labels(ids)
         unique_clusters = set(initial_labels[initial_labels >= 0])
 
         if len(unique_clusters) == 0:
@@ -487,23 +513,24 @@ def visualize_edge_eviction():
 
             # Reset for each step
             dbscan_step = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-            dbscan_step.insert(X)
+            dbscan_step.insert(X, ids=ids)
 
             # Get cluster
-            labels_before = dbscan_step.get_cluster_labels(X)
+            labels_before = dbscan_step.get_cluster_labels(ids)
             cluster_label_step = int(
                 list(set(labels_before[labels_before >= 0]))[0])
             cluster_step = dbscan_step.get_cluster(cluster_label_step)
 
             # Evict points
             if n_evict > 0:
-                evicted_count = dbscan_step.evict_from_cluster_edge(
+                evicted_ids = dbscan_step.evict_from_cluster_edge(
                     cluster_label_step, n_evict)
+                evicted_count = len(evicted_ids) if evicted_ids else 0
             else:
                 evicted_count = 0
 
             # Get updated labels
-            labels_after = dbscan_step.get_cluster_labels(X)
+            labels_after = dbscan_step.get_cluster_labels(ids)
 
             # Identify evicted points
             evicted_mask = (labels_before >= 0) & (labels_after == -1)
@@ -577,11 +604,14 @@ def visualize_edge_eviction_detailed():
     for idx, n_evict in enumerate(eviction_requests):
         ax = axes[idx]
 
+        # Generate IDs for data points
+        ids = [f"point_{i}" for i in range(len(X))]
+
         # Reset DBSCAN for each step
         dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-        dbscan.insert(X)
+        dbscan.insert(X, ids=ids)
 
-        labels_before = dbscan.get_cluster_labels(X)
+        labels_before = dbscan.get_cluster_labels(ids)
         unique_clusters = set(labels_before[labels_before >= 0])
 
         if len(unique_clusters) == 0:
@@ -593,7 +623,7 @@ def visualize_edge_eviction_detailed():
         cluster = dbscan.get_cluster(cluster_label)
 
         # Get core/border status before eviction
-        core_mask = np.array([dbscan._objects.get_object(X[i]).is_core
+        core_mask = np.array([dbscan._objects.get_object_by_id(ids[i]).is_core
                              if labels_before[i] >= 0 else False
                              for i in range(len(X))])
         border_mask = (labels_before >= 0) & (~core_mask)
@@ -604,12 +634,13 @@ def visualize_edge_eviction_detailed():
 
         # Perform eviction
         if n_evict > 0:
-            evicted_count = dbscan.evict_from_cluster_edge(
+            evicted_ids = dbscan.evict_from_cluster_edge(
                 cluster_label, n_evict)
+            evicted_count = len(evicted_ids) if evicted_ids else 0
         else:
             evicted_count = 0
 
-        labels_after = dbscan.get_cluster_labels(X)
+        labels_after = dbscan.get_cluster_labels(ids)
 
         # Categorize points
         remaining_core = (labels_after >= 0) & core_mask
@@ -639,9 +670,10 @@ def visualize_edge_eviction_detailed():
                        c='red', s=80, alpha=0.8, edgecolors='darkred',
                        linewidth=1.0, marker='X', label='Core (evicted)', zorder=5)
 
-        # Title with statistics
-        remaining_size = cluster.size if cluster.size > 0 else 0
-        remaining_cores = cluster.core_count if cluster.size > 0 else 0
+        # Title with statistics - need to re-fetch cluster after eviction
+        cluster_after = dbscan.get_cluster(cluster_label)
+        remaining_size = cluster_after.size if cluster_after and cluster_after.size > 0 else 0
+        remaining_cores = cluster_after.core_count if cluster_after and cluster_after.size > 0 else 0
 
         if idx == 0:
             title = (f'Initial State\n'

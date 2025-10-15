@@ -25,31 +25,38 @@ def test1():
     data = read_handl_data()
 
     algo = IncrementalDBSCAN(eps=1)
-    algo.insert(data)
-    algo.delete(data)
+    inserted_objects = algo.insert(data)
+    # Get IDs of inserted objects for deletion
+    inserted_ids = [obj.id for obj in inserted_objects]
+    algo.delete(inserted_ids)
 
 
 def test2():
     data = read_chameleon_data()[:2000]
 
     algo = IncrementalDBSCAN(eps=10)
-    algo.insert(data)
-    algo.delete(data)
+    inserted_objects = algo.insert(data)
+    # Get IDs of inserted objects for deletion
+    inserted_ids = [obj.id for obj in inserted_objects]
+    algo.delete(inserted_ids)
 
 
 def test_soft_clustering():
     data = read_chameleon_data()[:2000]
 
     algo = IncrementalDBSCAN(eps=10, min_pts=5, eps_soft=20)
-    algo.insert(data)
+    inserted_objects = algo.insert(data)
+
+    # Get IDs of inserted objects for soft clustering
+    inserted_ids = [obj.id for obj in inserted_objects]
 
     # Test soft clustering with different kernels
-    algo.get_soft_labels(data, kernel='gaussian')
-    algo.get_soft_labels(data, kernel='inverse')
-    algo.get_soft_labels(data, kernel='linear')
+    algo.get_soft_labels(inserted_ids, kernel='gaussian')
+    algo.get_soft_labels(inserted_ids, kernel='inverse')
+    algo.get_soft_labels(inserted_ids, kernel='linear')
 
     # Test without noise probability
-    algo.get_soft_labels(data, include_noise_prob=False)
+    algo.get_soft_labels(inserted_ids, include_noise_prob=False)
 
 
 def print_profile(test, tag=''):

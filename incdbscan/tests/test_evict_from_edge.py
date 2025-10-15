@@ -26,10 +26,11 @@ def test_evict_border_points_only():
     ])
 
     all_points = np.vstack([core_points, border_points])
-    incdbscan.insert(all_points)
+    inserted_objects = incdbscan.insert(all_points)
+    object_ids = [obj.id for obj in inserted_objects]
 
     # Verify we have one cluster
-    labels = incdbscan.get_cluster_labels(all_points)
+    labels = incdbscan.get_cluster_labels(object_ids)
     assert len(set(labels[labels >= 0])) == 1
     cluster_label = int(labels[0])
 
@@ -41,9 +42,12 @@ def test_evict_border_points_only():
     assert initial_border_count > 0, "Test setup should create border points"
 
     # Evict 2 border points
-    evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=2)
+    evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=2)
 
-    assert evicted_count == 2
+    assert len(evicted_ids) == 2
+
+    # Get updated cluster after eviction
+    cluster = incdbscan.get_cluster(cluster_label)
     assert cluster.size == initial_size - 2
     # Border count should decrease by at most 2 (could be less if some borders became noise)
     assert cluster.border_count <= initial_border_count
@@ -69,19 +73,20 @@ def test_evict_all_border_points():
     ])
 
     all_points = np.vstack([core_points, border_points])
-    incdbscan.insert(all_points)
+    inserted_objects = incdbscan.insert(all_points)
+    object_ids = [obj.id for obj in inserted_objects]
 
-    labels = incdbscan.get_cluster_labels(all_points)
+    labels = incdbscan.get_cluster_labels(object_ids)
     cluster_label = int(labels[0])
 
     cluster = incdbscan.get_cluster(cluster_label)
     initial_border_count = cluster.border_count
 
     # Try to evict more than available borders
-    evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=10)
+    evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=10)
 
     # Should evict at least all border points
-    assert evicted_count >= initial_border_count
+    assert len(evicted_ids) >= initial_border_count
 
     # Cluster should still exist
     cluster = incdbscan.get_cluster(cluster_label)
@@ -102,20 +107,24 @@ def test_evict_with_core_points():
         [4, 0],
     ])
 
-    incdbscan.insert(points)
+    inserted_objects = incdbscan.insert(points)
+    object_ids = [obj.id for obj in inserted_objects]
 
-    labels = incdbscan.get_cluster_labels(points)
+    labels = incdbscan.get_cluster_labels(object_ids)
     cluster_label = int(labels[0])
 
     cluster = incdbscan.get_cluster(cluster_label)
     initial_size = cluster.size
 
     # Try to evict 3 points
-    evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=3)
+    evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=3)
 
     # Should evict some points (endpoints are non-articulation points)
-    assert evicted_count > 0
-    assert cluster.size == initial_size - evicted_count
+    assert len(evicted_ids) > 0
+
+    # Get updated cluster after eviction
+    cluster = incdbscan.get_cluster(cluster_label)
+    assert cluster.size == initial_size - len(evicted_ids)
 
     # Cluster should still be connected
     assert incdbscan.get_cluster(cluster_label) is not None
@@ -141,9 +150,10 @@ def test_evict_prevents_split():
     ])
 
     all_points = np.vstack([left_region, bridge, right_region])
-    incdbscan.insert(all_points)
+    inserted_objects = incdbscan.insert(all_points)
+    object_ids = [obj.id for obj in inserted_objects]
 
-    labels = incdbscan.get_cluster_labels(all_points)
+    labels = incdbscan.get_cluster_labels(object_ids)
     unique_clusters = set(labels[labels >= 0])
 
     if len(unique_clusters) == 1:
@@ -153,10 +163,10 @@ def test_evict_prevents_split():
         initial_components = 1
 
         # Try to evict points
-        evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=3)
+        evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=3)
 
         # Should evict some points but keep the bridge
-        assert evicted_count > 0
+        assert len(evicted_ids) > 0
 
         # Cluster should still exist and be connected
         cluster = incdbscan.get_cluster(cluster_label)
@@ -168,9 +178,9 @@ def test_evict_from_empty_cluster():
     incdbscan = IncrementalDBSCAN(eps=1.5, min_pts=3)
 
     # Try to evict from non-existent cluster
-    evicted_count = incdbscan.evict_from_cluster_edge(cluster_label=999, n=5)
+    evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label=999, n=5)
 
-    assert evicted_count == 0
+    assert len(evicted_ids) == 0
 
 
 def test_evict_zero_points():
@@ -184,16 +194,20 @@ def test_evict_zero_points():
         [1, 1],
     ])
 
-    incdbscan.insert(points)
-    labels = incdbscan.get_cluster_labels(points)
+    inserted_objects = incdbscan.insert(points)
+    object_ids = [obj.id for obj in inserted_objects]
+    labels = incdbscan.get_cluster_labels(object_ids)
     cluster_label = int(labels[0])
 
     cluster = incdbscan.get_cluster(cluster_label)
     initial_size = cluster.size
 
-    evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=0)
+    evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=0)
 
-    assert evicted_count == 0
+    assert len(evicted_ids) == 0
+
+    # Get updated cluster after eviction (should be unchanged)
+    cluster = incdbscan.get_cluster(cluster_label)
     assert cluster.size == initial_size
 
 
@@ -204,16 +218,17 @@ def test_evict_single_core_cluster():
     # Single core with borders
     core = np.array([[0, 0], [0.5, 0]])  # Will be one core region
 
-    incdbscan.insert(core)
-    labels = incdbscan.get_cluster_labels(core)
+    inserted_objects = incdbscan.insert(core)
+    object_ids = [obj.id for obj in inserted_objects]
+    labels = incdbscan.get_cluster_labels(object_ids)
 
     if labels[0] >= 0:
         cluster_label = int(labels[0])
         cluster = incdbscan.get_cluster(cluster_label)
 
         # Should be able to evict all points safely
-        evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=10)
-        assert evicted_count >= 0
+        evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=10)
+        assert len(evicted_ids) >= 0
 
 
 def test_evict_maintains_cluster_statistics():
@@ -228,16 +243,20 @@ def test_evict_maintains_cluster_statistics():
         [2.5, 0.5],  # Border point
     ])
 
-    incdbscan.insert(points)
-    labels = incdbscan.get_cluster_labels(points)
+    inserted_objects = incdbscan.insert(points)
+    object_ids = [obj.id for obj in inserted_objects]
+    labels = incdbscan.get_cluster_labels(object_ids)
     cluster_label = int(labels[0])
 
     cluster = incdbscan.get_cluster(cluster_label)
     initial_size = cluster.size
     initial_weight = cluster.total_weight
 
-    evicted_count = incdbscan.evict_from_cluster_edge(cluster_label, n=1)
+    evicted_ids = incdbscan.evict_from_cluster_edge(cluster_label, n=1)
 
-    assert evicted_count == 1
+    assert len(evicted_ids) == 1
+
+    # Get updated cluster after eviction
+    cluster = incdbscan.get_cluster(cluster_label)
     assert cluster.size == initial_size - 1
     assert cluster.total_weight == initial_weight - 1.0  # Default weight is 1.0

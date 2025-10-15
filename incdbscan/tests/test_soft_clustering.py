@@ -18,10 +18,11 @@ class TestSoftClustering:
         X = np.array([
             [0, 0], [0, 1], [1, 0], [1, 1],
         ])
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
         # Should work without error
-        probs, labels = idb.get_soft_labels(X)
+        probs, cluster_labels = idb.get_soft_labels(ids)
         assert probs.shape[0] == len(X)
 
     def test_soft_clustering_with_eps_soft(self):
@@ -32,12 +33,13 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
-        probs, labels = idb.get_soft_labels(X)
+        probs, cluster_labels = idb.get_soft_labels(ids)
 
         # Should have 2 clusters
-        assert len(labels) == 2
+        assert len(cluster_labels) == 2
 
         # Probabilities should sum to 1
         np.testing.assert_allclose(probs.sum(axis=1), 1.0)
@@ -53,12 +55,14 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
-        probs, labels = idb.get_soft_labels(X, include_noise_prob=False)
+        probs, cluster_labels = idb.get_soft_labels(
+            ids, include_noise_prob=False)
 
         # Shape should be (n_samples, n_clusters) without noise column
-        assert probs.shape == (len(X), len(labels))
+        assert probs.shape == (len(X), len(cluster_labels))
 
         # Probabilities should still sum to 1
         np.testing.assert_allclose(probs.sum(axis=1), 1.0)
@@ -71,12 +75,13 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
         kernels = ['gaussian', 'inverse', 'linear']
 
         for kernel in kernels:
-            probs, labels = idb.get_soft_labels(X, kernel=kernel)
+            probs, cluster_labels = idb.get_soft_labels(ids, kernel=kernel)
 
             # All should produce valid probability distributions
             assert probs.shape[0] == len(X)
@@ -90,10 +95,11 @@ class TestSoftClustering:
             [0, 0], [0, 1], [1, 0], [1, 1],  # Make sure we have a cluster
         ])
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=2.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
         with pytest.raises(ValueError, match="Unknown kernel"):
-            idb.get_soft_labels(X, kernel='invalid_kernel')
+            idb.get_soft_labels(ids, kernel='invalid_kernel')
 
     def test_soft_clustering_no_clusters(self):
         """Test soft clustering when no clusters exist (all noise)."""
@@ -102,12 +108,13 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.0, min_pts=3, eps_soft=2.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
-        probs, labels = idb.get_soft_labels(X)
+        probs, cluster_labels = idb.get_soft_labels(ids)
 
-        # No clusters, so labels should be empty
-        assert len(labels) == 0
+        # No clusters, so cluster_labels should be empty
+        assert len(cluster_labels) == 0
 
         # All should be noise
         assert probs.shape == (len(X), 1)
@@ -118,10 +125,13 @@ class TestSoftClustering:
         idb = IncrementalDBSCAN(eps=1.0, min_pts=3, eps_soft=2.0)
 
         X_test = np.array([[0, 0], [1, 1]])
-        probs, labels = idb.get_soft_labels(X_test)
+        test_ids = list(range(len(X_test)))
+        idb.insert(X_test, ids=test_ids)
 
-        # No data, so everything is noise
-        assert len(labels) == 0
+        probs, cluster_labels = idb.get_soft_labels(test_ids)
+
+        # No clusters, so everything is noise
+        assert len(cluster_labels) == 0
         assert probs.shape == (len(X_test), 1)
         np.testing.assert_allclose(probs, 1.0)
 
@@ -132,11 +142,15 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X_train)
+        train_ids = list(range(len(X_train)))
+        idb.insert(X_train, ids=train_ids)
 
         # Query a new point near the cluster
         X_test = np.array([[0.5, 0.5]])
-        probs, labels = idb.get_soft_labels(X_test)
+        test_ids = [len(X_train)]
+        idb.insert(X_test, ids=test_ids)
+
+        probs, cluster_labels = idb.get_soft_labels(test_ids)
 
         # Should have valid probabilities
         assert probs.shape[0] == 1
@@ -150,14 +164,15 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
         # Get hard labels
-        hard_labels = idb.get_cluster_labels(X)
+        hard_labels = idb.get_cluster_labels(ids)
         assert hard_labels[-1] == -1  # Last point is noise
 
         # Get soft labels
-        probs, cluster_labels = idb.get_soft_labels(X)
+        probs, cluster_labels = idb.get_soft_labels(ids)
 
         # Noise point should have high noise probability
         # (since it's far from all clusters and beyond eps_soft range)
@@ -171,10 +186,14 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X1)
+        ids1 = list(range(len(X1)))
+        idb.insert(X1, ids=ids1)
 
         X_test = np.array([[5, 5]])
-        probs1, labels1 = idb.get_soft_labels(X_test)
+        test_id = [len(X1)]
+        idb.insert(X_test, ids=test_id)
+
+        probs1, cluster_labels1 = idb.get_soft_labels(test_id)
 
         # Initially far from clusters, should be mostly noise
         initial_noise_prob = probs1[0, -1]
@@ -184,16 +203,18 @@ class TestSoftClustering:
         X2 = np.array([
             [5, 5], [5, 6], [6, 5], [6, 6],
         ])
-        idb.insert(X2)
+        ids2 = list(range(len(X1) + len(X_test),
+                    len(X1) + len(X_test) + len(X2)))
+        idb.insert(X2, ids=ids2)
 
-        probs2, labels2 = idb.get_soft_labels(X_test)
+        probs2, cluster_labels2 = idb.get_soft_labels(test_id)
 
         # Now should have lower noise probability
         new_noise_prob = probs2[0, -1]
         assert new_noise_prob < initial_noise_prob
 
         # Should have more clusters now
-        assert len(labels2) > len(labels1)
+        assert len(cluster_labels2) > len(cluster_labels1)
 
     def test_soft_clustering_probability_properties(self):
         """Test mathematical properties of probability distribution."""
@@ -203,9 +224,10 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
-        probs, labels = idb.get_soft_labels(X, kernel='gaussian')
+        probs, cluster_labels = idb.get_soft_labels(ids, kernel='gaussian')
 
         # All probabilities should be in [0, 1]
         assert np.all(probs >= 0.0)
@@ -229,11 +251,15 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=4, eps_soft=5.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
         # Query point near border point
         X_test = np.array([[3, 0]])
-        probs, labels = idb.get_soft_labels(X_test)
+        test_id = [len(X)]
+        idb.insert(X_test, ids=test_id)
+
+        probs, cluster_labels = idb.get_soft_labels(test_id)
 
         # Should get valid probabilities
         assert probs.shape[0] == 1
@@ -247,10 +273,11 @@ class TestSoftClustering:
         ])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X)
+        ids = list(range(len(X)))
+        idb.insert(X, ids=ids)
 
         probs, cluster_labels = idb.get_soft_labels(
-            X, include_noise_prob=False)
+            ids, include_noise_prob=False)
 
         # Labels should be sorted
         assert np.all(cluster_labels[:-1] <= cluster_labels[1:])
@@ -266,9 +293,10 @@ class TestSoftClustering:
         weights = np.array([2.0, 1.0, 1.0, 1.0])
 
         idb = IncrementalDBSCAN(eps=1.5, min_pts=3, eps_soft=3.0)
-        idb.insert(X, sample_weight=weights)
+        ids = list(range(len(X)))
+        idb.insert(X, sample_weight=weights, ids=ids)
 
-        probs, labels = idb.get_soft_labels(X)
+        probs, cluster_labels = idb.get_soft_labels(ids)
 
         # Should produce valid probabilities
         assert probs.shape[0] == len(X)

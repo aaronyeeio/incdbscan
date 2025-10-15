@@ -12,35 +12,41 @@ class Inserter:
         self.objects = objects
         self.clusters = objects.clusters  # Shorthand for clusters
 
-    def batch_insert(self, object_values, weights):
-        """Insert multiple objects at once and update clustering."""
-        new_objects, weight_updated_objects = self.objects.batch_insert_objects(
-            object_values, weights)
+    def batch_insert(self, object_values, weights, ids=None):
+        """Insert multiple objects at once and update clustering.
 
-        # Update cluster weight statistics for objects whose weight was updated
-        if weight_updated_objects:
-            self.clusters.update_weight_for_objects(weight_updated_objects)
+        Args:
+            object_values: array-like of embeddings/positions
+            weights: array-like of weights
+            ids: optional list of object IDs
 
-        # Combine all objects that need clustering update
-        objects_to_process = new_objects + weight_updated_objects
+        Returns:
+            list of newly created Object instances
+        """
+        new_objects = self.objects.batch_insert_objects(
+            object_values, weights, ids=ids)
 
-        if not objects_to_process:
-            # Nothing to process
-            return
+        if not new_objects:
+            return []
+
+        # All inserted objects need clustering update
+        objects_to_process = new_objects
 
         # Collect all affected objects (processed objects + their neighbors)
         all_affected_objects = set(objects_to_process)
         for obj in objects_to_process:
             all_affected_objects.update(obj.neighbors)
 
-        # Track existing neighbors for core status update
-        # These are neighbors that were not newly inserted or weight-updated in this batch
+        # Track existing neighbors and their pre-insertion core status
+        # Only check affected objects, not all objects in the system
         existing_neighbors = all_affected_objects - set(objects_to_process)
+        pre_insertion_core_status = {obj.id: (obj.neighbor_count - sum(n.weight for n in obj.neighbors if n in objects_to_process) >= self.min_pts)
+                                     for obj in existing_neighbors}
 
         # Identify new cores and old cores among ALL affected objects
         new_core_neighbors, old_core_neighbors = \
             self._separate_core_neighbors_by_novelty_batch(
-                objects_to_process, all_affected_objects)
+                objects_to_process, all_affected_objects, pre_insertion_core_status)
 
         if not new_core_neighbors:
             # No new core objects created, just assign labels to processed objects
@@ -59,7 +65,7 @@ class Inserter:
                     label_of_new_object = CLUSTER_LABEL_NOISE
 
                 self.clusters.set_label(obj, label_of_new_object)
-            return
+            return new_objects
 
         update_seeds = self._get_update_seeds(new_core_neighbors)
 
@@ -126,28 +132,29 @@ class Inserter:
         # Dissolve clusters that are smaller than min_cluster_size
         self.clusters.dissolve_small_clusters(self.min_cluster_size)
 
-    def _separate_core_neighbors_by_novelty_batch(self, objects_to_process, all_affected_objects):
+        return new_objects
+
+    def _separate_core_neighbors_by_novelty_batch(self, objects_to_process, all_affected_objects, pre_insertion_core_status):
         """Identify new cores and old cores among all affected objects during batch insert.
 
         Args:
             objects_to_process: Objects that were newly inserted or had weight updates
             all_affected_objects: All objects affected by the insertion (including neighbors)
+            pre_insertion_core_status: Dict mapping object_id to bool indicating if it was core before insertion
         """
         new_cores = set()
         old_cores = set()
-        objects_to_process_set = set(objects_to_process)
 
         for obj in all_affected_objects:
-            if obj.neighbor_count == self.min_pts:
-                # Just became a core (neighbor_count exactly equals min_pts)
-                new_cores.add(obj)
-            elif obj.neighbor_count > self.min_pts:
-                # Has neighbor_count > min_pts
-                if obj in objects_to_process_set:
-                    # Object was newly inserted or had weight update -> treat as new core
+            if obj.is_core:
+                # Object is currently a core point
+                was_core_before = pre_insertion_core_status.get(obj.id, False)
+
+                if not was_core_before:
+                    # Became a core during this insertion
                     new_cores.add(obj)
                 else:
-                    # Was core before this batch operation
+                    # Was already a core before
                     old_cores.add(obj)
 
         return new_cores, old_cores

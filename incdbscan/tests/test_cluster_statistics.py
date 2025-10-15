@@ -106,13 +106,14 @@ class TestClusterStatistics:
         )
 
         incdbscan = IncrementalDBSCAN(eps=EPS, min_pts=MIN_PTS)
-        incdbscan.insert(data)
+        inserted_objects = incdbscan.insert(data)
 
         stats_before = incdbscan.get_cluster_statistics()
 
-        # Delete half of the data
-        data_to_delete = data[:len(data) // 2]
-        incdbscan.delete(data_to_delete)
+        # Delete half of the data by IDs
+        ids_to_delete = [
+            obj.id for obj in inserted_objects[:len(inserted_objects) // 2]]
+        incdbscan.delete(ids_to_delete)
 
         stats_after = incdbscan.get_cluster_statistics()
 
@@ -155,12 +156,14 @@ class TestClusterStatistics:
         np.random.seed(123)
         for _ in range(3):
             noise = np.random.uniform(-10, 10, (50, 2))
-            incdbscan.insert(noise)
+            noise_objects = incdbscan.insert(noise)
 
             stats_after_insert = incdbscan.get_cluster_statistics()
             self._verify_statistics_consistency(stats_after_insert)
 
-            incdbscan.delete(noise)
+            # Delete the noise objects
+            noise_ids = [obj.id for obj in noise_objects]
+            incdbscan.delete(noise_ids)
 
             stats_after_delete = incdbscan.get_cluster_statistics()
             self._verify_statistics_consistency(stats_after_delete)
@@ -182,7 +185,7 @@ class TestClusterStatistics:
         ])
 
         incdbscan = IncrementalDBSCAN(eps=EPS, min_pts=MIN_PTS)
-        incdbscan.insert(data)
+        inserted_objects = incdbscan.insert(data)
 
         stats = incdbscan.get_cluster_statistics()
 
@@ -190,15 +193,14 @@ class TestClusterStatistics:
         actual_core_count = 0
         actual_border_count = 0
 
-        for point in data:
-            obj = incdbscan._objects.get_object(point)
-            if obj:
-                label = incdbscan.clusters.get_label(obj)
-                if label >= 0:  # Only count clustered objects
-                    if obj.is_core:
-                        actual_core_count += 1
-                    else:
-                        actual_border_count += 1
+        # Count actual core and border points by checking object properties
+        for obj in inserted_objects:
+            label = incdbscan.clusters.get_label(obj)
+            if label >= 0:  # Only count clustered objects
+                if obj.is_core:
+                    actual_core_count += 1
+                else:
+                    actual_border_count += 1
 
         # Statistics should match actual counts
         assert stats['total_cores'] == actual_core_count
@@ -348,18 +350,16 @@ class TestClusterStatistics:
         data = np.vstack([cluster_data, noise_data])
 
         incdbscan = IncrementalDBSCAN(eps=EPS, min_pts=MIN_PTS)
-        incdbscan.insert(data)
+        inserted_objects = incdbscan.insert(data)
 
         stats = incdbscan.get_cluster_statistics()
 
         # Count actual clustered points (excluding noise)
         clustered_count = 0
-        for point in data:
-            obj = incdbscan._objects.get_object(point)
-            if obj:
-                label = incdbscan.clusters.get_label(obj)
-                if label >= 0:  # Not noise
-                    clustered_count += 1
+        for obj in inserted_objects:
+            label = incdbscan.clusters.get_label(obj)
+            if label >= 0:  # Not noise
+                clustered_count += 1
 
         # Statistics should only count clustered objects, not noise
         assert stats['total_objects'] == clustered_count
@@ -380,7 +380,7 @@ class TestClusterStatistics:
         )
 
         incdbscan = IncrementalDBSCAN(eps=EPS, min_pts=MIN_PTS)
-        incdbscan.insert(data)
+        inserted_objects = incdbscan.insert(data)
 
         clusters = incdbscan.get_all_clusters()
 
@@ -389,9 +389,9 @@ class TestClusterStatistics:
             assert cluster.total_objects_added > 0
             assert cluster.total_objects_removed == 0  # Nothing deleted yet
 
-        # Delete some data
-        data_to_delete = data[:30]
-        incdbscan.delete(data_to_delete)
+        # Delete some data by IDs
+        ids_to_delete = [obj.id for obj in inserted_objects[:30]]
+        incdbscan.delete(ids_to_delete)
 
         clusters_after_delete = incdbscan.get_all_clusters()
 

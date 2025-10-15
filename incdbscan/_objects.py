@@ -2,7 +2,8 @@ from typing import (
     Dict,
     List,
     Set,
-    TYPE_CHECKING
+    TYPE_CHECKING,
+    Optional
 )
 
 import rustworkx as rx
@@ -13,7 +14,6 @@ from ._object import (
     Object,
     ObjectId
 )
-from ._utils import hash_
 
 if TYPE_CHECKING:
     from ._clusters import Clusters
@@ -33,70 +33,73 @@ class Objects:
         self.eps = eps
         self.eps_soft = eps_soft
 
-    def get_object(self, value):
-        object_id = hash_(value)
+        # Auto-increment ID generator
+        self._next_id = 0
+
+    def get_object_by_id(self, object_id: ObjectId) -> Optional[Object]:
+        """Get object by its ID."""
         if object_id in self._object_id_to_node_id:
-            obj = self._get_object_from_object_id(object_id)
-            return obj
+            return self._get_object_from_object_id(object_id)
         return None
 
-    def batch_insert_objects(self, values, weights):
+    def _generate_id(self) -> ObjectId:
+        """Generate a new auto-increment ID."""
+        object_id = str(self._next_id)
+        self._next_id += 1
+        return object_id
+
+    def batch_insert_objects(self, values, weights, ids: Optional[List[ObjectId]] = None):
         """Insert multiple objects at once, handling neighbor relationships efficiently.
 
+        Each point is inserted as a separate object, even if multiple points have the same position.
+
+        Args:
+            values: array-like of embeddings/positions
+            weights: array-like of weights for each point
+            ids: optional list of object IDs. If None, auto-generated IDs are used.
+
         Returns:
-            tuple: (new_objects, weight_updated_objects)
-                - new_objects: list of newly created Object instances
-                - weight_updated_objects: list of existing Object instances whose weights were updated
+            list of newly created Object instances
         """
-        object_ids = [hash_(value) for value in values]
+        # Generate IDs if not provided
+        if ids is None:
+            ids = [self._generate_id() for _ in range(len(values))]
+        else:
+            # Ensure IDs are strings
+            ids = [str(id_) for id_ in ids]
 
-        # Group duplicates: accumulate weights for same object_id
-        id_info = {}  # object_id -> (value, total_weight)
-        for i, (value, object_id, weight) in enumerate(zip(values, object_ids, weights)):
-            if object_id in id_info:
-                id_info[object_id] = (
-                    id_info[object_id][0], id_info[object_id][1] + weight)
-            else:
-                id_info[object_id] = (value, weight)
+        # Check for duplicate IDs in the input
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate IDs in input")
 
-        # Separate existing vs new objects
+        # Check if any IDs already exist
+        existing_ids = [
+            id_ for id_ in ids if id_ in self._object_id_to_node_id]
+        if existing_ids:
+            raise ValueError(f"IDs already exist: {existing_ids}")
+
+        # Create all new objects
         new_objects = []
-        new_values = []
-        new_ids = []
-        weight_updated_objects = []
-
-        for object_id, (value, total_weight) in id_info.items():
-            if object_id in self._object_id_to_node_id:
-                # Existing object - update weight and neighbor counts
-                obj = self._get_object_from_object_id(object_id)
-                obj.weight += total_weight
-                for neighbor in obj.neighbors:
-                    neighbor.neighbor_count += total_weight
-                weight_updated_objects.append(obj)
-            else:
-                # New object
-                new_obj = Object(object_id, self.min_pts, total_weight)
-                self._insert_graph_metadata(new_obj)
-                self.clusters.set_label_of_inserted_object(new_obj)
-                new_objects.append(new_obj)
-                new_values.append(value)
-                new_ids.append(object_id)
+        for object_id, weight in zip(ids, weights):
+            new_obj = Object(object_id, self.min_pts, weight)
+            self._insert_graph_metadata(new_obj)
+            self.clusters.set_label_of_inserted_object(new_obj)
+            new_objects.append(new_obj)
 
         if not new_objects:
-            return [], weight_updated_objects
+            return []
 
         # Batch insert all new values into searcher (rebuilds tree once)
-        self.neighbor_searcher.batch_insert(new_values, new_ids)
+        self.neighbor_searcher.batch_insert(values, ids)
 
         # Batch query neighbors for all new objects
         all_neighbor_ids_list = self.neighbor_searcher.batch_query_neighbors(
-            new_values, radius=self.eps)
+            values, radius=self.eps)
 
         # Build lookup for new object indices
         new_obj_id_to_index = {obj.id: i for i, obj in enumerate(new_objects)}
 
         # Build a fast lookup cache for all objects we'll need to access
-        # This avoids 1.9M+ calls to _get_object_from_object_id
         all_unique_neighbor_ids = set()
         for neighbor_ids in all_neighbor_ids_list:
             all_unique_neighbor_ids.update(neighbor_ids)
@@ -142,7 +145,7 @@ class Objects:
         if edges_to_add:
             self.graph.add_edges_from(edges_to_add)
 
-        return new_objects, weight_updated_objects
+        return new_objects
 
     def _insert_graph_metadata(self, new_object):
         node_id = self.graph.add_node(new_object)
@@ -171,40 +174,34 @@ class Objects:
         obj = self.graph[node_id]
         return obj
 
-    def batch_delete_objects(self, objects_to_delete, weights):
-        """Delete multiple objects at once, handling weight reduction and cleanup efficiently.
+    def batch_delete_objects(self, ids_to_delete: List[ObjectId]):
+        """Delete multiple objects by their IDs.
 
         Args:
-            objects_to_delete: list of Object instances to delete
-            weights: list of weights to reduce for each object
+            ids_to_delete: list of object IDs to delete
 
         Returns:
             was_core_map: dict mapping object to whether it was core before deletion
-            objects_to_remove: list of objects that will be completely removed (weight <= 0)
+            objects_removed: list of objects that were removed
         """
-        from collections import defaultdict
-
-        # Group by object and accumulate weights for duplicates
-        object_weight_map = defaultdict(float)
-        for obj, weight in zip(objects_to_delete, weights):
-            object_weight_map[obj] += weight
+        # Get objects from IDs
+        objects_to_remove = []
+        for object_id in ids_to_delete:
+            obj = self.get_object_by_id(object_id)
+            if obj is None:
+                raise ValueError(f"Object with ID {object_id} not found")
+            objects_to_remove.append(obj)
 
         # Record which objects were core before deletion
         was_core_map = {}
-        for obj in object_weight_map:
+        for obj in objects_to_remove:
             was_core_map[obj] = obj.is_core
 
-        # Phase 1: Reduce weights for all objects and their neighbors
-        objects_to_remove = []
-        for obj, total_weight in object_weight_map.items():
-            obj.weight -= total_weight
-
+        # Phase 1: Update neighbor counts for all neighbors
+        for obj in objects_to_remove:
             # Update neighbor counts for all neighbors
             for neighbor in obj.neighbors:
-                neighbor.neighbor_count -= total_weight
-
-            if obj.weight <= 0:
-                objects_to_remove.append(obj)
+                neighbor.neighbor_count -= obj.weight
 
         # Phase 2: Clean up objects that need to be completely removed
         # Remove from neighbor sets
@@ -215,8 +212,7 @@ class Objects:
 
         # Batch delete from neighbor searcher (rebuild tree only once)
         if objects_to_remove:
-            ids_to_remove = [obj.id for obj in objects_to_remove]
-            self.neighbor_searcher.batch_delete(ids_to_remove)
+            self.neighbor_searcher.batch_delete(ids_to_delete)
 
         # Remove graph metadata and labels
         for obj in objects_to_remove:

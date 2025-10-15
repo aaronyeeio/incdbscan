@@ -102,7 +102,7 @@ class SoftClusteringCache:
             if obj_id in self._core_label_cache:
                 self._index_to_label[idx] = self._core_label_cache[obj_id]
 
-    def get_soft_labels(self, X, eps_soft, kernel='gaussian', include_noise_prob=True, target_clusters=None):
+    def get_soft_labels(self, ids, eps_soft, kernel='gaussian', include_noise_prob=True, target_clusters=None):
         """Get soft cluster assignment probabilities for data points.
 
         For each point, computes membership probability to each cluster based on
@@ -110,8 +110,8 @@ class SoftClusteringCache:
 
         Parameters
         ----------
-        X : ndarray of shape (n_samples, n_features)
-            Query points to get soft labels for (already validated)
+        ids : list of object IDs
+            IDs of objects to get soft labels for (already converted to strings)
 
         eps_soft : float
             The radius for soft clustering queries
@@ -139,6 +139,17 @@ class SoftClusteringCache:
         cluster_labels : ndarray of shape (n_clusters,)
             Cluster labels corresponding to columns (excluding noise column)
         """
+        # Get data values by finding the index of each ID in neighbor_searcher
+        X = []
+        for id_ in ids:
+            if id_ in self.objects.neighbor_searcher.ids:
+                idx = self.objects.neighbor_searcher.ids.index(id_)
+                X.append(self.objects.neighbor_searcher.values[idx])
+            else:
+                # Object not found, skip or handle error
+                raise ValueError(
+                    f"Object with ID {id_} not found in neighbor_searcher")
+        X = np.array(X)
         n_samples = len(X)
 
         # Get active cluster labels
@@ -223,16 +234,25 @@ class SoftClusteringCache:
 
             core_labels = neighbor_labels[core_mask]
             core_dists = dists[core_mask]
+            core_indices = indices[core_mask]
 
             # Vectorized weight computation
             if kernel == 'gaussian':
-                weights = np.exp(-core_dists**2 / (2 * sigma**2))
+                distance_weights = np.exp(-core_dists**2 / (2 * sigma**2))
             elif kernel == 'inverse':
-                weights = 1.0 / (1.0 + core_dists / eps_soft)
+                distance_weights = 1.0 / (1.0 + core_dists / eps_soft)
             elif kernel == 'linear':
-                weights = np.maximum(0, 1.0 - core_dists / eps_soft)
+                distance_weights = np.maximum(0, 1.0 - core_dists / eps_soft)
             else:
                 raise ValueError(f"Unknown kernel: {kernel}")
+
+            # Get point weights and multiply with distance weights
+            ids_list = self.objects.neighbor_searcher.ids
+            point_weights = np.array([
+                self.objects._get_object_from_object_id(ids_list[idx]).weight
+                for idx in core_indices
+            ])
+            weights = distance_weights * point_weights
 
             # Map labels to column indices using array lookup
             col_indices = label_to_col_array[core_labels]

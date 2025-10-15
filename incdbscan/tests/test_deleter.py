@@ -16,12 +16,12 @@ def test_after_deleting_enough_objects_only_noise_remain(
         incdbscan4,
         blob_in_middle):
 
-    incdbscan4.insert(blob_in_middle)
+    inserted_objects = incdbscan4.insert(blob_in_middle)
+    object_ids = [obj.id for obj in inserted_objects]
 
     for i in range(len(blob_in_middle) - 1):
-        object_to_delete = blob_in_middle[[i]]
-
-        incdbscan4.delete(object_to_delete)
+        # Delete by ID
+        incdbscan4.delete([object_ids[i]])
 
         expected_label = (
             CLUSTER_LABEL_NOISE
@@ -29,12 +29,15 @@ def test_after_deleting_enough_objects_only_noise_remain(
             else CLUSTER_LABEL_FIRST_CLUSTER
         )
 
-        assert_cluster_labels(incdbscan4, blob_in_middle[i+1:], expected_label)
+        # Check remaining objects
+        remaining_ids = object_ids[i+1:]
+        assert_cluster_labels(incdbscan4, remaining_ids, expected_label)
 
 
 def test_deleting_cores_only_makes_borders_noise(incdbscan4, point_at_origin):
-    point_to_delete = point_at_origin
-    incdbscan4.insert(point_to_delete)
+    # Insert core point and get ID
+    core_objects = incdbscan4.insert(point_at_origin)
+    core_id = core_objects[0].id
 
     border = np.array([
         [EPS, 0],
@@ -42,10 +45,14 @@ def test_deleting_cores_only_makes_borders_noise(incdbscan4, point_at_origin):
         [0, -EPS],
     ])
 
-    incdbscan4.insert(border)
-    incdbscan4.delete(point_to_delete)
+    # Insert border points and get IDs
+    border_objects = incdbscan4.insert(border)
+    border_ids = [obj.id for obj in border_objects]
 
-    assert_cluster_labels(incdbscan4, border, CLUSTER_LABEL_NOISE)
+    # Delete core point
+    incdbscan4.delete([core_id])
+
+    assert_cluster_labels(incdbscan4, border_ids, CLUSTER_LABEL_NOISE)
 
 
 def test_objects_losing_core_property_can_keep_cluster_id(
@@ -62,11 +69,16 @@ def test_objects_losing_core_property_can_keep_cluster_id(
 
     all_points = np.vstack([point_to_delete, core_points])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
+    core_point_ids = [obj.id for obj in inserted_objects[1:]]
 
-    incdbscan3.delete(point_to_delete)
-    assert_cluster_labels(incdbscan3, core_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    assert_cluster_labels(incdbscan3, core_point_ids,
+                          CLUSTER_LABEL_FIRST_CLUSTER)
+
+    incdbscan3.delete([point_to_delete_id])
+    assert_cluster_labels(incdbscan3, core_point_ids,
+                          CLUSTER_LABEL_FIRST_CLUSTER)
 
 
 def test_border_object_can_switch_to_other_cluster(
@@ -74,7 +86,8 @@ def test_border_object_can_switch_to_other_cluster(
         point_at_origin):
 
     border = point_at_origin
-    incdbscan4.insert(border)
+    border_objects = incdbscan4.insert(border)
+    border_id = border_objects[0].id
 
     cluster_1 = np.array([
         [EPS, 0],
@@ -89,15 +102,14 @@ def test_border_object_can_switch_to_other_cluster(
     insert_objects_then_assert_cluster_labels(
         incdbscan4, cluster_1, cluster_1_expected_label)
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan4, cluster_2, cluster_2_expected_label
-    )
+    cluster_2_objects = incdbscan4.insert(cluster_2)
+    cluster_2_point_to_delete_id = cluster_2_objects[0].id
 
-    assert_cluster_labels(incdbscan4, border, cluster_2_expected_label)
+    assert_cluster_labels(incdbscan4, [border_id], cluster_2_expected_label)
 
-    incdbscan4.delete(cluster_2[[0]])
+    incdbscan4.delete([cluster_2_point_to_delete_id])
 
-    assert_cluster_labels(incdbscan4, border, cluster_1_expected_label)
+    assert_cluster_labels(incdbscan4, [border_id], cluster_1_expected_label)
 
 
 def test_borders_around_point_losing_core_property_can_become_noise(
@@ -116,13 +128,16 @@ def test_borders_around_point_losing_core_property_can_become_noise(
     all_points = np.vstack([point_to_delete, core, border])
     all_points_but_point_to_delete = np.vstack([core, border])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan4, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan4.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
+    remaining_point_ids = [obj.id for obj in inserted_objects[1:]]
 
-    incdbscan4.delete(point_to_delete)
+    assert_cluster_labels(incdbscan4, remaining_point_ids,
+                          CLUSTER_LABEL_FIRST_CLUSTER)
 
-    assert_cluster_labels(
-        incdbscan4, all_points_but_point_to_delete, CLUSTER_LABEL_NOISE)
+    incdbscan4.delete([point_to_delete_id])
+
+    assert_cluster_labels(incdbscan4, remaining_point_ids, CLUSTER_LABEL_NOISE)
 
 
 def test_core_property_of_singleton_update_seed_is_kept_after_deletion(
@@ -141,13 +156,18 @@ def test_core_property_of_singleton_update_seed_is_kept_after_deletion(
 
     all_points = np.vstack([point_to_delete, cores, lonely])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
+    core_ids = [obj.id for obj in inserted_objects[1:4]]
+    lonely_id = inserted_objects[4].id
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(incdbscan3, core_ids, CLUSTER_LABEL_FIRST_CLUSTER)
+    assert_cluster_labels(incdbscan3, [lonely_id], CLUSTER_LABEL_FIRST_CLUSTER)
 
-    assert_cluster_labels(incdbscan3, cores, CLUSTER_LABEL_FIRST_CLUSTER)
-    assert_cluster_labels(incdbscan3, lonely, CLUSTER_LABEL_NOISE)
+    incdbscan3.delete([point_to_delete_id])
+
+    assert_cluster_labels(incdbscan3, core_ids, CLUSTER_LABEL_FIRST_CLUSTER)
+    assert_cluster_labels(incdbscan3, [lonely_id], CLUSTER_LABEL_NOISE)
 
 
 def test_cluster_id_of_single_component_update_seeds_is_kept_after_deletion(
@@ -166,13 +186,18 @@ def test_cluster_id_of_single_component_update_seeds_is_kept_after_deletion(
 
     all_points = np.vstack([point_to_delete, cores, lonely])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
+    core_ids = [obj.id for obj in inserted_objects[1:4]]
+    lonely_id = inserted_objects[4].id
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(incdbscan3, core_ids, CLUSTER_LABEL_FIRST_CLUSTER)
+    assert_cluster_labels(incdbscan3, [lonely_id], CLUSTER_LABEL_FIRST_CLUSTER)
 
-    assert_cluster_labels(incdbscan3, cores, CLUSTER_LABEL_FIRST_CLUSTER)
-    assert_cluster_labels(incdbscan3, lonely, CLUSTER_LABEL_NOISE)
+    incdbscan3.delete([point_to_delete_id])
+
+    assert_cluster_labels(incdbscan3, core_ids, CLUSTER_LABEL_FIRST_CLUSTER)
+    assert_cluster_labels(incdbscan3, [lonely_id], CLUSTER_LABEL_NOISE)
 
 
 def test_cluster_id_of_single_component_objects_is_kept_after_deletion(
@@ -190,12 +215,15 @@ def test_cluster_id_of_single_component_objects_is_kept_after_deletion(
 
     all_points = np.vstack([point_to_delete, cores])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
+    core_ids = [obj.id for obj in inserted_objects[1:]]
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(incdbscan3, core_ids, CLUSTER_LABEL_FIRST_CLUSTER)
 
-    assert_cluster_labels(incdbscan3, cores, CLUSTER_LABEL_FIRST_CLUSTER)
+    incdbscan3.delete([point_to_delete_id])
+
+    assert_cluster_labels(incdbscan3, core_ids, CLUSTER_LABEL_FIRST_CLUSTER)
 
 
 def test_simple_two_way_split(
@@ -209,13 +237,20 @@ def test_simple_two_way_split(
 
     all_points = np.vstack([point_to_delete, points_left, points_right])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(
+        incdbscan3, [obj.id for obj in inserted_objects[1:]], CLUSTER_LABEL_FIRST_CLUSTER)
+
+    incdbscan3.delete([point_to_delete_id])
+
+    # Get object IDs for the remaining points after deletion
+    left_ids = [obj.id for obj in inserted_objects[1:4]]  # points_left
+    right_ids = [obj.id for obj in inserted_objects[4:]]  # points_right
 
     assert_split_creates_new_labels_for_new_clusters(
-        incdbscan3, [points_left, points_right], CLUSTER_LABEL_FIRST_CLUSTER)
+        incdbscan3, [left_ids, right_ids], CLUSTER_LABEL_FIRST_CLUSTER)
 
 
 def test_simple_two_way_split_with_noise(
@@ -237,15 +272,23 @@ def test_simple_two_way_split_with_noise(
         points_bottom
     ])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(
+        incdbscan3, [obj.id for obj in inserted_objects[1:]], CLUSTER_LABEL_FIRST_CLUSTER)
+
+    incdbscan3.delete([point_to_delete_id])
+
+    # Get object IDs for the remaining points after deletion
+    left_ids = [obj.id for obj in inserted_objects[1:4]]  # points_left
+    top_ids = [obj.id for obj in inserted_objects[4:7]]  # points_top
+    bottom_ids = [obj.id for obj in inserted_objects[7:]]  # points_bottom
 
     assert_split_creates_new_labels_for_new_clusters(
-        incdbscan3, [points_left, points_top], CLUSTER_LABEL_FIRST_CLUSTER)
+        incdbscan3, [left_ids, top_ids], CLUSTER_LABEL_FIRST_CLUSTER)
 
-    assert_cluster_labels(incdbscan3, points_bottom, CLUSTER_LABEL_NOISE)
+    assert_cluster_labels(incdbscan3, bottom_ids, CLUSTER_LABEL_NOISE)
 
 
 def test_three_way_split(
@@ -267,14 +310,22 @@ def test_three_way_split(
         points_bottom
     ])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(
+        incdbscan3, [obj.id for obj in inserted_objects[1:]], CLUSTER_LABEL_FIRST_CLUSTER)
+
+    incdbscan3.delete([point_to_delete_id])
+
+    # Get object IDs for the remaining points after deletion
+    left_ids = [obj.id for obj in inserted_objects[1:4]]  # points_left
+    top_ids = [obj.id for obj in inserted_objects[4:7]]  # points_top
+    bottom_ids = [obj.id for obj in inserted_objects[7:]]  # points_bottom
 
     assert_split_creates_new_labels_for_new_clusters(
         incdbscan3,
-        [points_left, points_top, points_bottom],
+        [left_ids, top_ids, bottom_ids],
         CLUSTER_LABEL_FIRST_CLUSTER
     )
 
@@ -297,13 +348,20 @@ def test_simultaneous_split_and_non_split(
 
     all_points = np.vstack([point_to_delete, points_left, points_right])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan3, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan3.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
 
-    incdbscan3.delete(point_to_delete)
+    assert_cluster_labels(
+        incdbscan3, [obj.id for obj in inserted_objects[1:]], CLUSTER_LABEL_FIRST_CLUSTER)
+
+    incdbscan3.delete([point_to_delete_id])
+
+    # Get object IDs for the remaining points after deletion
+    left_ids = [obj.id for obj in inserted_objects[1:4]]  # points_left
+    right_ids = [obj.id for obj in inserted_objects[4:]]  # points_right
 
     assert_split_creates_new_labels_for_new_clusters(
-        incdbscan3, [points_left, points_right], CLUSTER_LABEL_FIRST_CLUSTER)
+        incdbscan3, [left_ids, right_ids], CLUSTER_LABEL_FIRST_CLUSTER)
 
 
 def test_two_way_split_with_non_dense_bridge(incdbscan4, point_at_origin):
@@ -329,17 +387,26 @@ def test_two_way_split_with_non_dense_bridge(incdbscan4, point_at_origin):
         bridge_point, point_to_delete, points_left, points_right
     ])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan4, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan4.insert(all_points)
+    # point_to_delete is the second point
+    point_to_delete_id = inserted_objects[1].id
+    bridge_point_id = inserted_objects[0].id
 
-    incdbscan4.delete(point_to_delete)
+    assert_cluster_labels(
+        incdbscan4, [obj.id for obj in inserted_objects], CLUSTER_LABEL_FIRST_CLUSTER)
+
+    incdbscan4.delete([point_to_delete_id])
+
+    # Get object IDs for the remaining points after deletion
+    left_ids = [obj.id for obj in inserted_objects[2:7]]  # points_left
+    right_ids = [obj.id for obj in inserted_objects[7:]]  # points_right
 
     assert_split_creates_new_labels_for_new_clusters(
-        incdbscan4, [points_left, points_right], CLUSTER_LABEL_FIRST_CLUSTER)
+        incdbscan4, [left_ids, right_ids], CLUSTER_LABEL_FIRST_CLUSTER)
 
     assert_label_of_object_is_among_possible_ones(
         incdbscan4,
-        bridge_point,
+        bridge_point_id,
         {CLUSTER_LABEL_FIRST_CLUSTER, CLUSTER_LABEL_FIRST_CLUSTER + 1}
     )
 
@@ -353,40 +420,44 @@ def test_simultaneous_splits_within_two_clusters(
     points_right = hourglass_on_the_right
     points_left = reflect_horizontally(points_right)
 
-    incdbscan4.insert(point_to_delete)
+    point_to_delete_objects = incdbscan4.insert(point_to_delete)
+    point_to_delete_id = point_to_delete_objects[0].id
 
     cluster_1_expected_label = CLUSTER_LABEL_FIRST_CLUSTER
-    insert_objects_then_assert_cluster_labels(
-        incdbscan4, points_left, cluster_1_expected_label)
+    left_objects = incdbscan4.insert(points_left)
+    left_ids = [obj.id for obj in left_objects]
+    assert_cluster_labels(incdbscan4, left_ids, cluster_1_expected_label)
 
     cluster_2_expected_label = CLUSTER_LABEL_FIRST_CLUSTER + 1
-    insert_objects_then_assert_cluster_labels(
-        incdbscan4, points_right, cluster_2_expected_label)
+    right_objects = incdbscan4.insert(points_right)
+    right_ids = [obj.id for obj in right_objects]
+    assert_cluster_labels(incdbscan4, right_ids, cluster_2_expected_label)
 
-    incdbscan4.delete(point_to_delete)
+    incdbscan4.delete([point_to_delete_id])
 
+    # Create expected clusters using object IDs
     expected_clusters = [
-        points_left[:3], points_left[-3:], points_right[:3], points_right[-3:]
+        left_ids[:3], left_ids[-3:], right_ids[:3], right_ids[-3:]
     ]
 
     assert_split_creates_new_labels_for_new_clusters(
         incdbscan4, expected_clusters, CLUSTER_LABEL_FIRST_CLUSTER)
 
     expected_cluster_labels_left = {
-        incdbscan4.get_cluster_labels(points_left[[2]])[0],
-        incdbscan4.get_cluster_labels(points_left[[4]])[0],
+        incdbscan4.get_cluster_labels([left_ids[2]])[0],
+        incdbscan4.get_cluster_labels([left_ids[4]])[0],
     }
 
     assert_label_of_object_is_among_possible_ones(
-        incdbscan4, points_left[[3]], expected_cluster_labels_left)
+        incdbscan4, left_ids[3], expected_cluster_labels_left)
 
     expected_cluster_labels_right = {
-        incdbscan4.get_cluster_labels(points_right[[2]])[0],
-        incdbscan4.get_cluster_labels(points_right[[4]])[0]
+        incdbscan4.get_cluster_labels([right_ids[2]])[0],
+        incdbscan4.get_cluster_labels([right_ids[4]])[0]
     }
 
     assert_label_of_object_is_among_possible_ones(
-        incdbscan4, points_right[[3]], expected_cluster_labels_right)
+        incdbscan4, right_ids[3], expected_cluster_labels_right)
 
 
 def test_two_non_dense_bridges(incdbscan4, point_at_origin):
@@ -418,12 +489,20 @@ def test_two_non_dense_bridges(incdbscan4, point_at_origin):
         point_to_delete, points_left, points_right, points_top, bottom_bridge
     ])
 
-    insert_objects_then_assert_cluster_labels(
-        incdbscan4, all_points, CLUSTER_LABEL_FIRST_CLUSTER)
+    inserted_objects = incdbscan4.insert(all_points)
+    point_to_delete_id = inserted_objects[0].id
 
-    incdbscan4.delete(point_to_delete)
+    assert_cluster_labels(
+        incdbscan4, [obj.id for obj in inserted_objects], CLUSTER_LABEL_FIRST_CLUSTER)
 
-    expected_clusters = [points_left, points_right, points_top]
+    incdbscan4.delete([point_to_delete_id])
+
+    # Get object IDs for the remaining points after deletion
+    left_ids = [obj.id for obj in inserted_objects[1:6]]  # points_left
+    right_ids = [obj.id for obj in inserted_objects[6:11]]  # points_right
+    top_ids = [obj.id for obj in inserted_objects[11:19]]  # points_top
+
+    expected_clusters = [left_ids, right_ids, top_ids]
 
     assert_split_creates_new_labels_for_new_clusters(
         incdbscan4, expected_clusters, CLUSTER_LABEL_FIRST_CLUSTER)
@@ -455,27 +534,40 @@ def test_point_whose_neighbor_changes_its_core_property(incdbscan3):
     ])
 
     # Step 1
-    incdbscan3.insert(some_points_in_the_top)
-    incdbscan3.insert(point_to_delete)
-    assert_cluster_labels(incdbscan3, some_points_in_the_top, CLUSTER_LABEL_FIRST_CLUSTER)
-    assert_cluster_labels(incdbscan3, point_to_delete, CLUSTER_LABEL_FIRST_CLUSTER)
+    some_points_objects = incdbscan3.insert(some_points_in_the_top)
+    some_points_ids = [obj.id for obj in some_points_objects]
+    point_to_delete_objects = incdbscan3.insert(point_to_delete)
+    point_to_delete_id = point_to_delete_objects[0].id
+
+    assert_cluster_labels(incdbscan3, some_points_ids,
+                          CLUSTER_LABEL_FIRST_CLUSTER)
+    assert_cluster_labels(
+        incdbscan3, [point_to_delete_id], CLUSTER_LABEL_FIRST_CLUSTER)
 
     # Step 2
-    incdbscan3.delete(point_to_delete)
-    assert_cluster_labels(incdbscan3, some_points_in_the_top, CLUSTER_LABEL_NOISE)
+    incdbscan3.delete([point_to_delete_id])
+    assert_cluster_labels(incdbscan3, some_points_ids, CLUSTER_LABEL_NOISE)
 
     # Step 3
     cluster_label_second_cluster = CLUSTER_LABEL_FIRST_CLUSTER + 1
-    incdbscan3.insert(another_point_in_the_top)
-    incdbscan3.insert(point_to_delete)
-    incdbscan3.insert(points_right)
-    assert_cluster_labels(incdbscan3, all_points_in_the_top, cluster_label_second_cluster)
-    assert_cluster_labels(incdbscan3, point_to_delete, cluster_label_second_cluster)
-    assert_cluster_labels(incdbscan3, points_right, cluster_label_second_cluster)
+    another_point_objects = incdbscan3.insert(another_point_in_the_top)
+    another_point_id = another_point_objects[0].id
+    point_to_delete_objects = incdbscan3.insert(point_to_delete)
+    point_to_delete_id = point_to_delete_objects[0].id
+    points_right_objects = incdbscan3.insert(points_right)
+    points_right_ids = [obj.id for obj in points_right_objects]
+
+    all_points_in_the_top_ids = some_points_ids + [another_point_id]
+    assert_cluster_labels(
+        incdbscan3, all_points_in_the_top_ids, cluster_label_second_cluster)
+    assert_cluster_labels(
+        incdbscan3, [point_to_delete_id], cluster_label_second_cluster)
+    assert_cluster_labels(incdbscan3, points_right_ids,
+                          cluster_label_second_cluster)
 
     # Step 4
-    expected_clusters = [all_points_in_the_top, points_right]
-    incdbscan3.delete(point_to_delete)
+    expected_clusters = [all_points_in_the_top_ids, points_right_ids]
+    incdbscan3.delete([point_to_delete_id])
     assert_split_creates_new_labels_for_new_clusters(
         incdbscan3,
         expected_clusters,

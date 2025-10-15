@@ -88,7 +88,7 @@ class IncrementalDBSCAN:
         self._soft_clustering_cache = SoftClusteringCache(
             self._objects, self.clusters)
 
-    def insert(self, X, sample_weight=None):
+    def insert(self, X, sample_weight=None, ids=None):
         """Insert objects into the object set, then update clustering.
 
         Parameters
@@ -99,9 +99,14 @@ class IncrementalDBSCAN:
         sample_weight : array-like of shape (n_samples,), optional (default=None)
             Weight of each sample. If None, all samples have weight 1.
 
+        ids : array-like of shape (n_samples,), optional (default=None)
+            IDs for each sample. If None, auto-generated IDs are used.
+            Each ID will be converted to string.
+
         Returns
         -------
-        self
+        inserted_objects : list of Object
+            List of newly inserted Object instances
 
         """
         X = input_check(X)
@@ -113,99 +118,90 @@ class IncrementalDBSCAN:
             if len(sample_weight) != len(X):
                 raise ValueError(
                     f'sample_weight has {len(sample_weight)} elements, '
+                    f'but X has {len(X)} samples.'
+                )
+
+        if ids is not None:
+            ids = list(ids)
+            if len(ids) != len(X):
+                raise ValueError(
+                    f'ids has {len(ids)} elements, '
                     f'but X has {len(X)} samples.'
                 )
 
         # Use batch insertion for all cases
-        self._inserter.batch_insert(X, sample_weight)
+        inserted_objects = self._inserter.batch_insert(
+            X, sample_weight, ids=ids)
 
         # Incrementally update soft clustering cache
         self._soft_clustering_cache.update_after_insert()
 
-        return self
+        return inserted_objects
 
-    def delete(self, X, sample_weight=None):
-        """Delete objects from object set, then update clustering.
+    def delete(self, ids):
+        """Delete objects from object set by their IDs, then update clustering.
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
-            The data objects to be deleted from the object set.
-
-        sample_weight : array-like of shape (n_samples,), optional (default=None)
-            Weight of each sample. If None, all samples have weight 1.
+        ids : array-like of object IDs
+            The IDs of objects to be deleted from the object set.
 
         Returns
         -------
         self
 
         """
-        X = input_check(X)
+        ids = [str(id_) for id_ in ids]
 
-        if sample_weight is None:
-            sample_weight = np.ones(len(X))
-        else:
-            sample_weight = np.asarray(sample_weight)
-            if len(sample_weight) != len(X):
-                raise ValueError(
-                    f'sample_weight has {len(sample_weight)} elements, '
-                    f'but X has {len(X)} samples.'
-                )
+        # Check which IDs exist
+        missing_ids = []
+        for id_ in ids:
+            if self._objects.get_object_by_id(id_) is None:
+                missing_ids.append(id_)
 
-        objects_to_delete = []
-        weights = []
-        for ix, value in enumerate(X):
-            obj = self._objects.get_object(value)
-            if obj:
-                objects_to_delete.append(obj)
-                weights.append(sample_weight[ix])
-            else:
-                warnings.warn(IncrementalDBSCANWarning(
-                    f'Object at position {ix} was not deleted because '
-                    'there is no such object in the object set.'))
+        if missing_ids:
+            warnings.warn(IncrementalDBSCANWarning(
+                f'The following IDs were not deleted because they do not exist: {missing_ids}'))
 
-        if objects_to_delete:
-            # Collect deleted object IDs
-            deleted_ids = [obj.id for obj in objects_to_delete]
+        # Filter to only existing IDs
+        ids_to_delete = [id_ for id_ in ids if id_ not in missing_ids]
 
-            self._deleter.batch_delete(objects_to_delete, weights)
+        if ids_to_delete:
+            self._deleter.batch_delete(ids_to_delete)
 
             # Incrementally update soft clustering cache
-            self._soft_clustering_cache.update_after_delete(deleted_ids)
+            self._soft_clustering_cache.update_after_delete(ids_to_delete)
 
         return self
 
-    def get_cluster_labels(self, X):
-        """Get cluster labels of objects.
+    def get_cluster_labels(self, ids):
+        """Get cluster labels of objects by their IDs.
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
-            The data objects to get labels for.
+        ids : array-like of object IDs
+            The IDs of objects to get labels for.
 
         Returns
         -------
         labels : ndarray of shape (n_samples,)
                  Cluster labels. Effective labels start from 0. -1 means the
-                 object is noise. numpy.nan means the object was not in the
-                 object set.
+                 object is noise. numpy.nan means the object was not found.
 
         """
-        X = input_check(X)
+        ids = [str(id_) for id_ in ids]
+        labels = np.zeros(len(ids))
 
-        labels = np.zeros(len(X))
-
-        for ix, value in enumerate(X):
-            obj = self._objects.get_object(value)
+        for ix, object_id in enumerate(ids):
+            obj = self._objects.get_object_by_id(object_id)
 
             if obj:
                 label = self.clusters.get_label(obj)
-
             else:
                 label = np.nan
                 warnings.warn(
                     IncrementalDBSCANWarning(
-                        f'No label was retrieved for object at position {ix} '
+                        f'No label was retrieved for ID {object_id} '
                         'because there is no such object in the object set.'
                     )
                 )
@@ -249,7 +245,7 @@ class IncrementalDBSCAN:
         """
         return self.clusters.get_statistics()
 
-    def get_soft_labels(self, X, kernel='gaussian', include_noise_prob=True, target_clusters=None):
+    def get_soft_labels(self, ids, kernel='gaussian', include_noise_prob=True, target_clusters=None):
         """Get soft cluster assignment probabilities for data points.
 
         For each point, computes membership probability to each cluster based on
@@ -257,8 +253,8 @@ class IncrementalDBSCAN:
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
-            Query points to get soft labels for
+        ids : array-like of object IDs
+            IDs of objects to get soft labels for
 
         kernel : str, optional (default='gaussian')
             Distance weighting kernel. Options:
@@ -283,10 +279,10 @@ class IncrementalDBSCAN:
         cluster_labels : ndarray of shape (n_clusters,)
             Cluster labels corresponding to columns (excluding noise column)
         """
-        X = input_check(X)
+        ids = [str(id_) for id_ in ids]
 
         return self._soft_clustering_cache.get_soft_labels(
-            X, self.eps_soft, kernel=kernel, include_noise_prob=include_noise_prob,
+            ids, self.eps_soft, kernel=kernel, include_noise_prob=include_noise_prob,
             target_clusters=target_clusters
         )
 
@@ -308,9 +304,9 @@ class IncrementalDBSCAN:
 
         Returns
         -------
-        evicted_count : int
-            Actual number of points evicted (may be less than n if not enough
-            non-critical points exist)
+        evicted_ids : list
+            IDs of evicted points (may be empty or contain fewer than n IDs
+            if not enough non-critical points exist)
 
         Notes
         -----
@@ -322,16 +318,18 @@ class IncrementalDBSCAN:
         """
         cluster = self.clusters.get_cluster(cluster_label)
         if not cluster or cluster.size == 0:
-            return 0
+            return []
 
         # Find points that can be safely evicted
         evict_candidates = self._find_evictable_points(cluster, n)
 
-        # Mark evicted points as noise
+        # Mark evicted points as noise and collect their IDs
+        evicted_ids = []
         for obj in evict_candidates:
             self.clusters.set_label(obj, CLUSTER_LABEL_NOISE)
+            evicted_ids.append(obj.id)
 
-        return len(evict_candidates)
+        return evicted_ids
 
     def _find_max_evictable_with_stats(self, cluster, candidates, max_n):
         """Find maximum number of candidates that can be evicted while preserving cluster.

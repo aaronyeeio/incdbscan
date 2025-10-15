@@ -35,8 +35,8 @@ def benchmark_insert_delete():
 
     # Generate test data
     test_insert_data = np.random.randn(n_test, n_dims).astype(np.float32)
-    # Use first 10 points for deletion
-    test_delete_data = base_data[:n_test].copy()
+    # Generate IDs for deletion (will be created after base insertion)
+    test_delete_ids = [f"delete_{i}" for i in range(n_test)]
 
     # Initialize algorithm
     print("Initializing IncrementalDBSCAN...")
@@ -45,10 +45,13 @@ def benchmark_insert_delete():
     # Insert base dataset
     print(f"Inserting {n_base} base points...")
     start = time.time()
-    algo.insert(base_data)
+    base_objects = algo.insert(base_data)
     base_insert_time = time.time() - start
     print(f"  Time: {base_insert_time:.4f} seconds")
     print()
+
+    # Store IDs of first n_test points for deletion testing
+    test_delete_ids = [obj.id for obj in base_objects[:n_test]]
 
     # Benchmark batch insertion
     print(f"Benchmarking BATCH insertion of {n_test} points...")
@@ -62,7 +65,7 @@ def benchmark_insert_delete():
     # Benchmark batch deletion
     print(f"Benchmarking BATCH deletion of {n_test} points...")
     start = time.time()
-    algo.delete(test_delete_data)
+    algo.delete(test_delete_ids)
     batch_delete_time = time.time() - start
     print(f"  Time: {batch_delete_time:.6f} seconds")
     print(f"  Average per point: {batch_delete_time / n_test * 1000:.4f} ms")
@@ -71,9 +74,11 @@ def benchmark_insert_delete():
     # Benchmark single insertion
     print(f"Benchmarking SINGLE insertion of {n_test} points...")
     single_insert_data = np.random.randn(n_test, n_dims).astype(np.float32)
+    single_insert_ids = []
     start = time.time()
     for point in single_insert_data:
-        algo.insert(point.reshape(1, -1))
+        inserted_objects = algo.insert(point.reshape(1, -1))
+        single_insert_ids.append(inserted_objects[0].id)
     single_insert_time = time.time() - start
     print(f"  Time: {single_insert_time:.6f} seconds")
     print(f"  Average per point: {single_insert_time / n_test * 1000:.4f} ms")
@@ -81,10 +86,10 @@ def benchmark_insert_delete():
 
     # Benchmark single deletion
     print(f"Benchmarking SINGLE deletion of {n_test} points...")
-    single_delete_data = base_data[n_test:n_test * 2].copy()
+    # Use IDs from single insertion for deletion
     start = time.time()
-    for point in single_delete_data:
-        algo.delete(point.reshape(1, -1))
+    for obj_id in single_insert_ids:
+        algo.delete([obj_id])
     single_delete_time = time.time() - start
     print(f"  Time: {single_delete_time:.6f} seconds")
     print(f"  Average per point: {single_delete_time / n_test * 1000:.4f} ms")

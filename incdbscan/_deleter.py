@@ -14,13 +14,20 @@ class Deleter:
         self.objects = objects
         self.clusters = objects.clusters  # Shorthand for clusters
 
-    def batch_delete(self, objects_to_delete, weights):
+    def batch_delete(self, ids_to_delete):
         """Delete multiple objects at once and update clustering.
 
         Args:
-            objects_to_delete: list of Object instances to delete
-            weights: list of weights to reduce for each object
+            ids_to_delete: list of object IDs to delete
         """
+        # Get objects from IDs first to collect affected objects
+        objects_to_delete = []
+        for object_id in ids_to_delete:
+            obj = self.objects.get_object_by_id(object_id)
+            if obj is None:
+                raise ValueError(f"Object with ID {object_id} not found")
+            objects_to_delete.append(obj)
+
         # Collect affected objects before deletion (for core status update later)
         affected_objects_for_stats = set()
         for obj in objects_to_delete:
@@ -28,11 +35,11 @@ class Deleter:
 
         # Phase 1: Batch delete objects and get state information
         was_core_map, objects_removed = \
-            self.objects.batch_delete_objects(objects_to_delete, weights)
+            self.objects.batch_delete_objects(ids_to_delete)
 
         # Phase 2: Identify all objects that lost their core property
         ex_cores = self._get_objects_that_lost_core_property_batch(
-            objects_to_delete, weights, was_core_map)
+            objects_to_delete, was_core_map)
 
         # Phase 3: Get update seeds and non-core neighbors
         update_seeds, non_core_neighbors_of_ex_cores = \
@@ -105,46 +112,37 @@ class Deleter:
         # Phase 8: Dissolve clusters that are smaller than min_cluster_size
         self.clusters.dissolve_small_clusters(self.min_cluster_size)
 
-    def _get_objects_that_lost_core_property_batch(self, objects_deleted,
-                                                   weights, was_core_map):
+    def _get_objects_that_lost_core_property_batch(self, objects_deleted, was_core_map):
         """Identify all objects that lost their core property during batch deletion.
 
         Args:
             objects_deleted: list of objects that were deleted
-            weights: list of weights that were reduced
             was_core_map: dict mapping object to whether it was core before deletion
 
         Returns:
             set of objects that lost their core property
         """
-        from collections import defaultdict
-
-        # Accumulate total weight reduction per object
-        total_weight_reduction = defaultdict(float)
-        for obj, weight in zip(objects_deleted, weights):
-            total_weight_reduction[obj] += weight
-
         ex_cores = set()
         affected_neighbors = set()
 
         # Collect all affected neighbors
-        for obj in total_weight_reduction:
+        for obj in objects_deleted:
             affected_neighbors.update(obj.neighbors)
 
         # Check each affected neighbor to see if it lost core property
         for neighbor in affected_neighbors:
             # Skip if already removed
-            if neighbor.weight <= 0:
+            if neighbor.id not in self.objects._object_id_to_node_id:
                 continue
 
             # Check if this neighbor lost core property
             # Current state: not core, but was it core before?
             if not neighbor.is_core:
                 # Calculate what the neighbor_count was before all deletions
-                # We need to add back the weight reductions from all deleted neighbors
+                # We need to add back the weights from all deleted neighbors
                 weight_lost = sum(
-                    total_weight_reduction[obj]
-                    for obj in total_weight_reduction
+                    obj.weight
+                    for obj in objects_deleted
                     if neighbor in obj.neighbors
                 )
                 previous_neighbor_count = neighbor.neighbor_count + weight_lost
@@ -154,7 +152,7 @@ class Deleter:
                     ex_cores.add(neighbor)
 
         # Add deleted objects that were core
-        for obj in total_weight_reduction:
+        for obj in objects_deleted:
             if was_core_map.get(obj, False):
                 ex_cores.add(obj)
 

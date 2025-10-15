@@ -12,23 +12,23 @@ CLUSTER_LABEL_NOISE = -1
 CLUSTER_LABEL_FIRST_CLUSTER = 0
 
 
-def assert_cluster_labels(incdbscan_fit, objects: Iterable, label):
+def assert_cluster_labels(incdbscan_fit, object_ids: Iterable, label):
     assert np.all(
-        incdbscan_fit.get_cluster_labels(objects) == label
+        incdbscan_fit.get_cluster_labels(object_ids) == label
     )
 
 
-def assert_two_objects_are_in_same_cluster(incdbscan_fit, object1, object2):
-    assert incdbscan_fit.get_cluster_labels(object1) == \
-        incdbscan_fit.get_cluster_labels(object2)
+def assert_two_objects_are_in_same_cluster(incdbscan_fit, object_id1, object_id2):
+    assert incdbscan_fit.get_cluster_labels([object_id1]) == \
+        incdbscan_fit.get_cluster_labels([object_id2])
 
 
 def assert_label_of_object_is_among_possible_ones(
         incdbscan_fit,
-        obj,
+        object_id,
         possible_labels):
 
-    assert incdbscan_fit.get_cluster_labels(obj)[0] in possible_labels
+    assert incdbscan_fit.get_cluster_labels([object_id])[0] in possible_labels
 
 
 def insert_objects_then_assert_cluster_labels(
@@ -36,8 +36,9 @@ def insert_objects_then_assert_cluster_labels(
         values: Iterable,
         expected_label):
 
-    incdbscan.insert(values)
-    assert_cluster_labels(incdbscan, values, expected_label)
+    inserted_objects = incdbscan.insert(values)
+    object_ids = [obj.id for obj in inserted_objects]
+    assert_cluster_labels(incdbscan, object_ids, expected_label)
 
 
 def assert_split_creates_new_labels_for_new_clusters(
@@ -50,8 +51,8 @@ def assert_split_creates_new_labels_for_new_clusters(
     for cluster in clusters:
         labels_within_cluster = set()
 
-        for obj in cluster:
-            label_of_object = incdbscan_fit.get_cluster_labels([obj])[0]
+        for object_id in cluster:
+            label_of_object = incdbscan_fit.get_cluster_labels([object_id])[0]
             labels_within_cluster.add(label_of_object)
 
         assert len(labels_within_cluster) == 1
@@ -68,43 +69,43 @@ def reflect_horizontally(points):
     return new_points
 
 
-def delete_object_and_assert_error(incdbscan_fit, obj, error):
+def delete_object_and_assert_error(incdbscan_fit, object_ids, error):
     with pytest.raises(error):
-        incdbscan_fit.delete(obj)
+        incdbscan_fit.delete(object_ids)
 
 
-def delete_object_and_assert_no_warning(incdbscan_fit, obj):
+def delete_object_and_assert_no_warning(incdbscan_fit, object_ids):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        incdbscan_fit.delete(obj)
+        incdbscan_fit.delete(object_ids)
 
 
-def delete_object_and_assert_warning(incdbscan_fit, obj, warning):
+def delete_object_and_assert_warning(incdbscan_fit, object_ids, warning):
     with pytest.warns(warning):
-        incdbscan_fit.delete(obj)
+        incdbscan_fit.delete(object_ids)
 
 
-def get_label_and_assert_error(incdbscan_fit, obj, error):
+def get_label_and_assert_error(incdbscan_fit, object_ids, error):
     with pytest.raises(error):
-        incdbscan_fit.get_cluster_labels(obj)
+        incdbscan_fit.get_cluster_labels(object_ids)
 
 
-def get_label_and_assert_no_warning(incdbscan_fit, obj):
+def get_label_and_assert_no_warning(incdbscan_fit, object_ids):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        incdbscan_fit.get_cluster_labels(obj)
+        incdbscan_fit.get_cluster_labels(object_ids)
 
-    return incdbscan_fit.get_cluster_labels(obj)
+    return incdbscan_fit.get_cluster_labels(object_ids)
 
 
-def get_label_and_assert_warning(incdbscan_fit, obj, warning):
+def get_label_and_assert_warning(incdbscan_fit, object_ids, warning):
     with pytest.warns(warning):
-        return incdbscan_fit.get_cluster_labels(obj)
+        return incdbscan_fit.get_cluster_labels(object_ids)
 
 
-def insert_object_and_assert_error(incdbscan_fit, obj, error):
+def insert_object_and_assert_error(incdbscan_fit, values, error):
     with pytest.raises(error):
-        incdbscan_fit.insert(obj)
+        incdbscan_fit.insert(values)
 
 
 def are_lists_isomorphic(list_1, list_2):

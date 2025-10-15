@@ -42,11 +42,13 @@ def benchmark_eviction_cluster_size():
 
         # Initialize and insert
         dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-        dbscan.insert(X)
+        inserted_objects = dbscan.insert(X)
 
         print(f"Inserted {cluster_size} points")
 
-        labels = dbscan.get_cluster_labels(X)
+        # Get IDs from inserted objects
+        ids = [obj.id for obj in inserted_objects]
+        labels = dbscan.get_cluster_labels(ids)
         unique_clusters = set(labels[labels >= 0])
 
         if len(unique_clusters) == 0:
@@ -60,13 +62,15 @@ def benchmark_eviction_cluster_size():
 
         # Benchmark eviction
         start = time.time()
-        evicted_count = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
+        evicted_ids = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
         eviction_time = time.time() - start
 
+        evicted_count = len(evicted_ids)
         print(f"  Evicted: {evicted_count} points")
         print(f"  Time: {eviction_time * 1000:.4f} ms")
-        print(
-            f"  Time per point: {eviction_time / evicted_count * 1000:.4f} ms")
+        if evicted_count > 0:
+            print(
+                f"  Time per point: {eviction_time / evicted_count * 1000:.4f} ms")
         print()
 
         results.append((cluster_size, eviction_time, evicted_count))
@@ -111,16 +115,19 @@ def benchmark_eviction_amount():
 
         # Initialize
         dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-        dbscan.insert(X)
+        inserted_objects = dbscan.insert(X)
 
-        labels = dbscan.get_cluster_labels(X)
+        # Get IDs from inserted objects
+        ids = [obj.id for obj in inserted_objects]
+        labels = dbscan.get_cluster_labels(ids)
         cluster_label = int(list(set(labels[labels >= 0]))[0])
 
         # Benchmark
         start = time.time()
-        evicted_count = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
+        evicted_ids = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
         eviction_time = time.time() - start
 
+        evicted_count = len(evicted_ids)
         print(f"  Evicted: {evicted_count} points")
         print(f"  Time: {eviction_time * 1000:.4f} ms")
         print()
@@ -194,9 +201,11 @@ def benchmark_topology_comparison():
 
         # Initialize
         dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-        dbscan.insert(X)
+        inserted_objects = dbscan.insert(X)
 
-        labels = dbscan.get_cluster_labels(X)
+        # Get IDs from inserted objects
+        ids = [obj.id for obj in inserted_objects]
+        labels = dbscan.get_cluster_labels(ids)
         unique_clusters = set(labels[labels >= 0])
 
         if len(unique_clusters) == 0:
@@ -213,9 +222,10 @@ def benchmark_topology_comparison():
 
         # Benchmark
         start = time.time()
-        evicted_count = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
+        evicted_ids = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
         eviction_time = time.time() - start
 
+        evicted_count = len(evicted_ids)
         remaining_size = cluster.size if cluster.size > 0 else 0
         remaining_cores = cluster.core_count if cluster.size > 0 else 0
 
@@ -262,10 +272,18 @@ def benchmark_safe_vs_split_eviction():
 
     # Initialize
     dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-    dbscan.insert(X)
+    inserted_objects = dbscan.insert(X)
 
-    labels = dbscan.get_cluster_labels(X)
-    cluster_label = int(list(set(labels[labels >= 0]))[0])
+    # Get IDs from inserted objects
+    ids = [obj.id for obj in inserted_objects]
+    labels = dbscan.get_cluster_labels(ids)
+    unique_clusters = set(labels[labels >= 0])
+
+    if len(unique_clusters) == 0:
+        print("Warning: No clusters formed in benchmark_safe_vs_split_eviction")
+        return
+
+    cluster_label = int(list(unique_clusters)[0])
     cluster = dbscan.get_cluster(cluster_label)
 
     # Test different eviction amounts
@@ -282,17 +300,21 @@ def benchmark_safe_vs_split_eviction():
     for scenario_name, n_evict in eviction_scenarios:
         # Reset
         dbscan = IncrementalDBSCAN(eps=eps, min_pts=min_pts)
-        dbscan.insert(X)
-        labels = dbscan.get_cluster_labels(X)
+        inserted_objects = dbscan.insert(X)
+
+        # Get IDs from inserted objects
+        ids = [obj.id for obj in inserted_objects]
+        labels = dbscan.get_cluster_labels(ids)
         cluster_label = int(list(set(labels[labels >= 0]))[0])
 
         print(f"Scenario: {scenario_name} (request n={n_evict})")
 
         # Benchmark
         start = time.time()
-        evicted_count = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
+        evicted_ids = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
         eviction_time = time.time() - start
 
+        evicted_count = len(evicted_ids)
         cluster = dbscan.get_cluster(cluster_label)
         remaining = cluster.size if cluster.size > 0 else 0
 
@@ -348,10 +370,12 @@ def benchmark_high_dimensional():
 
         # Measure insertion time too
         start_insert = time.time()
-        dbscan.insert(X)
+        inserted_objects = dbscan.insert(X)
         insert_time = time.time() - start_insert
 
-        labels = dbscan.get_cluster_labels(X)
+        # Get IDs from inserted objects
+        ids = [obj.id for obj in inserted_objects]
+        labels = dbscan.get_cluster_labels(ids)
         unique_clusters = set(labels[labels >= 0])
 
         if len(unique_clusters) == 0:
@@ -363,9 +387,10 @@ def benchmark_high_dimensional():
 
         # Benchmark eviction
         start = time.time()
-        evicted_count = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
+        evicted_ids = dbscan.evict_from_cluster_edge(cluster_label, n_evict)
         eviction_time = time.time() - start
 
+        evicted_count = len(evicted_ids)
         print(f"  Insert time: {insert_time * 1000:.4f} ms")
         print(f"  Eviction time: {eviction_time * 1000:.4f} ms")
         print(f"  Evicted: {evicted_count} points")
